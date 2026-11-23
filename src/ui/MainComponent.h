@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ui/ChannelStrip.h"
+#include "ui/ChannelEditor.h"
 
 #include <juce_audio_utils/juce_audio_utils.h>
 #include <juce_gui_extra/juce_gui_extra.h>
@@ -23,6 +24,13 @@ public:
 private:
     class SourceList;
 
+    enum class Page
+    {
+        mixer,
+        channel,
+        sources
+    };
+
     void timerCallback() override;
     void chooseAudio();
     void filesChosen();
@@ -31,7 +39,8 @@ private:
     void syncOutputSelection();
     void refreshSources();
     void showAudioSetup();
-    void showPage (bool sources);
+    void showPage (Page next);
+    void editChannel (int channelIndex);
     void removeSourceById (int sourceId);
     void syncTransport();
     juce::String statusText();
@@ -50,6 +59,7 @@ private:
 
     juce::Label title { {}, "Virtual Console" };
     juce::TextButton mixerButton { "Mixer" };
+    juce::TextButton channelButton { "Channel" };
     juce::TextButton sourcesButton { "Sources" };
     juce::Label outputLabel { {}, "Output" };
     juce::ComboBox outputBox;
@@ -66,6 +76,7 @@ private:
     std::unique_ptr<SourceList> sourceModel;
     juce::ListBox sourceList { "Sources", nullptr };
     std::unique_ptr<StripBank> strips;
+    std::unique_ptr<ChannelEditor> channelEditor;
     juce::Viewport viewport;
     juce::Label mainLabel { {}, "MAIN" };
     MeterView mainMeter;
@@ -76,7 +87,8 @@ private:
     std::unique_ptr<juce::FileChooser> chooser;
     std::vector<OutputChoice> outputs;
     bool applyingOutput = false;
-    bool showingSources = false;
+    Page page = Page::mixer;
+    int editingChannel = 0;
     bool scrubbing = false;
     bool movingTimeline = false;
 

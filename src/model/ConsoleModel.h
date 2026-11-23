@@ -10,8 +10,8 @@ namespace vc
 {
 
 // Console state addressed like an X32 (/ch/01/mix/fader). Audio fields are atomics
-// so the mixer thread can read them without locking. Names, EQ, dynamics, and the
-// /virt source bindings are message-thread state. /virt is kept beside the console
+// so the mixer thread can read them without locking. Names and the /virt source
+// bindings stay on the message thread. /virt is kept beside the console
 // tree so a later scene export can drop it.
 class ConsoleModel
 {
@@ -24,6 +24,12 @@ public:
     bool getInt(const juce::String& path, int& value) const;
     bool setString(const juce::String& path, const juce::String& value);
     bool getString(const juce::String& path, juce::String& value) const;
+
+    bool assignFloat(const juce::String& path, float value);
+    bool assignInt(const juce::String& path, int value);
+    void mirrorFloat(const juce::String& path, float value);
+    void mirrorInt(const juce::String& path, int value);
+    void duplicateProcessing(int fromIndex, int toIndex, bool includePan);
 
     Channel& channel(int index) noexcept { return channels[(size_t) index]; }
     const Channel& channel(int index) const noexcept { return channels[(size_t) index]; }
@@ -47,6 +53,12 @@ public:
     juce::String getChannelName(int index) const;
     void setChannelName(int index, const juce::String& name);
 
+    bool isChannelLinked(int channelIndex) const noexcept;
+    void setChannelLinked(int channelIndex, bool linked);
+    void copyChannel(int channelIndex);
+    void pasteChannel(int channelIndex);
+    bool hasChannelClipboard() const noexcept { return clipboardReady; }
+
     const Stagebox& aes50a() const noexcept { return aes50A; }
     const Stagebox& aes50b() const noexcept { return aes50B; }
 
@@ -63,6 +75,44 @@ private:
     std::array<std::atomic<int>, numMuteGroups> muteGroups;
     std::atomic<int> listenMode { (int) ListenMode::automatic };
     int soloMode = 0;
+    std::atomic<int> channelLink[16] {};
+    bool suppressMirror = false;
+    bool clipboardReady = false;
+
+    struct ProcessingSnapshot
+    {
+        float trim = 0.5f;
+        float fader = 0.75f;
+        float pan = 0.5f;
+        float hpf = 0.2f;
+        float delayTime = 0.0f;
+        int invert = 0;
+        int on = 1;
+        int mainAssign = 1;
+        int hpfOn = 0;
+        int delayOn = 0;
+        int eqType[numChannelEqBands] {};
+        float eqFreq[numChannelEqBands] {};
+        float eqGain[numChannelEqBands] {};
+        float eqQ[numChannelEqBands] {};
+        int eqOn[numChannelEqBands] {};
+        int gateOn = 0;
+        float gateThr = 0.75f;
+        float gateRange = 0.5f;
+        float gateAttack = 0.2f;
+        float gateHold = 0.2f;
+        float gateRelease = 0.5f;
+        int compOn = 0;
+        float compThr = 0.75f;
+        float compRatio = 0.5f;
+        float compAttack = 0.2f;
+        float compHold = 0.2f;
+        float compRelease = 0.5f;
+        float compKnee = 0.2f;
+        float compMakeup = 0.5f;
+    };
+
+    ProcessingSnapshot clipboard;
 
     juce::String channelNames[numChannels];
     juce::String busNames[numBuses];

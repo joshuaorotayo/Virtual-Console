@@ -41,6 +41,7 @@ public:
     void resized() override;
     void paint (juce::Graphics& g) override;
     void setSourceNames (const juce::StringArray& names);
+    std::function<void()> onEdit;
 
 private:
     ConsoleModel& model;
@@ -58,6 +59,7 @@ private:
     FaderScale scale;
     juce::TextButton mute { "M" };
     juce::TextButton solo { "S" };
+    juce::TextButton edit { "EQ" };
 };
 
 } // namespace vc

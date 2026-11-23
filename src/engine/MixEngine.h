@@ -4,6 +4,7 @@
 
 #include "model/ConsoleModel.h"
 #include "engine/SharedSource.h"
+#include "engine/ChannelDsp.h"
 
 #include <vector>
 
@@ -62,6 +63,8 @@ private:
     ConsoleModel& model;
     juce::SpinLock sourceLock;
     std::array<SharedSource, maxSources> sources;
+    std::array<ChannelDsp, numChannels> channelDsp;
+    std::vector<float> processed;
     std::array<StripSmooth, numChannels> smooth {};
     std::array<std::atomic<float>, numChannels> channelMeters {};
     std::atomic<float> mainMeter { 0.0f };

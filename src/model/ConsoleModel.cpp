@@ -135,11 +135,11 @@ bool getEqFloat(const EqBand* bands, int bandCount, const juce::StringArray& tok
     const auto& eq = bands[band];
 
     if (leaf == "f")
-        value = eq.freq;
+        value = eq.freq.load(std::memory_order_relaxed);
     else if (leaf == "g")
-        value = eq.gain;
+        value = eq.gain.load(std::memory_order_relaxed);
     else if (leaf == "q")
-        value = eq.q;
+        value = eq.q.load(std::memory_order_relaxed);
     else
         return false;
 
@@ -183,9 +183,9 @@ bool getEqInt(const EqBand* bands, int bandCount, const juce::StringArray& token
     const auto& eq = bands[band];
 
     if (leaf == "t")
-        value = eq.type;
+        value = eq.type.load(std::memory_order_relaxed);
     else if (leaf == "on")
-        value = eq.on;
+        value = eq.on.load(std::memory_order_relaxed);
     else
         return false;
 
@@ -221,21 +221,21 @@ bool setDynamicsFloat(Dynamics& dyn, const juce::String& leaf, float value)
 bool getDynamicsFloat(const Dynamics& dyn, const juce::String& leaf, float& value)
 {
     if (leaf == "thr")
-        value = dyn.threshold;
+        value = dyn.threshold.load(std::memory_order_relaxed);
     else if (leaf == "ratio")
-        value = dyn.ratio;
+        value = dyn.ratio.load(std::memory_order_relaxed);
     else if (leaf == "attack")
-        value = dyn.attack;
+        value = dyn.attack.load(std::memory_order_relaxed);
     else if (leaf == "hold")
-        value = dyn.hold;
+        value = dyn.hold.load(std::memory_order_relaxed);
     else if (leaf == "release")
-        value = dyn.release;
+        value = dyn.release.load(std::memory_order_relaxed);
     else if (leaf == "range")
-        value = dyn.range;
+        value = dyn.range.load(std::memory_order_relaxed);
     else if (leaf == "knee")
-        value = dyn.knee;
+        value = dyn.knee.load(std::memory_order_relaxed);
     else if (leaf == "mgain")
-        value = dyn.makeup;
+        value = dyn.makeup.load(std::memory_order_relaxed);
     else
         return false;
 
@@ -338,7 +338,7 @@ bool getMixOn(const MixPoint& mix, const juce::StringArray& tokens, int index, i
 
     if (tokens[index] == "dyn" && index + 1 < tokens.size() && tokens[index + 1] == "on")
     {
-        value = mix.comp.on;
+        value = mix.comp.on.load(std::memory_order_relaxed);
         return true;
     }
 
@@ -493,6 +493,16 @@ void ConsoleModel::setChannelName(int index, const juce::String& name)
 
 bool ConsoleModel::setFloat(const juce::String& path, float value)
 {
+    const bool changed = assignFloat(path, value);
+
+    if (changed)
+        mirrorFloat(path, value);
+
+    return changed;
+}
+
+bool ConsoleModel::assignFloat(const juce::String& path, float value)
+{
     const auto tokens = tokensOf(path);
 
     if (tokens.size() < 2)
@@ -626,13 +636,13 @@ bool ConsoleModel::getFloat(const juce::String& path, float& value) const
 
         if (tokens.size() >= 4 && tokens[2] == "preamp" && tokens[3] == "hpf")
         {
-            value = strip.hpf;
+            value = strip.hpf.load(std::memory_order_relaxed);
             return true;
         }
 
         if (tokens.size() >= 4 && tokens[2] == "delay" && tokens[3] == "time")
         {
-            value = strip.delayTime;
+            value = strip.delayTime.load(std::memory_order_relaxed);
             return true;
         }
 
@@ -714,6 +724,16 @@ bool ConsoleModel::getFloat(const juce::String& path, float& value) const
 
 bool ConsoleModel::setInt(const juce::String& path, int value)
 {
+    const bool changed = assignInt(path, value);
+
+    if (changed)
+        mirrorInt(path, value);
+
+    return changed;
+}
+
+bool ConsoleModel::assignInt(const juce::String& path, int value)
+{
     const auto tokens = tokensOf(path);
 
     if (tokens.size() < 2)
@@ -751,6 +771,21 @@ bool ConsoleModel::setInt(const juce::String& path, int value)
     if (tokens[0] == "config" && tokens.size() >= 3 && tokens[1] == "solo" && tokens[2] == "mode")
     {
         soloMode = value != 0 ? 1 : 0;
+        return true;
+    }
+
+    if (tokens[0] == "config" && tokens.size() >= 3 && tokens[1] == "chlink")
+    {
+        const int pair = indexOf(tokens[2], 16);
+
+        if (pair < 0)
+            return false;
+
+        channelLink[(size_t) pair].store(value != 0 ? 1 : 0, std::memory_order_relaxed);
+
+        if (value != 0)
+            duplicateProcessing(pair * 2, pair * 2 + 1, false);
+
         return true;
     }
 
@@ -904,6 +939,17 @@ bool ConsoleModel::getInt(const juce::String& path, int& value) const
         return true;
     }
 
+    if (tokens[0] == "config" && tokens.size() >= 3 && tokens[1] == "chlink")
+    {
+        const int pair = indexOf(tokens[2], 16);
+
+        if (pair < 0)
+            return false;
+
+        value = channelLink[(size_t) pair].load(std::memory_order_relaxed);
+        return true;
+    }
+
     if (tokens[0] == "config" && tokens.size() >= 3 && tokens[1] == "mute")
     {
         const int index = indexOf(tokens[2], numMuteGroups);
@@ -952,19 +998,19 @@ bool ConsoleModel::getInt(const juce::String& path, int& value) const
 
         if (tokens.size() >= 4 && tokens[2] == "preamp" && tokens[3] == "hpon")
         {
-            value = strip.hpfOn;
+            value = strip.hpfOn.load(std::memory_order_relaxed);
             return true;
         }
 
         if (tokens.size() >= 4 && tokens[2] == "delay" && tokens[3] == "on")
         {
-            value = strip.delayOn;
+            value = strip.delayOn.load(std::memory_order_relaxed);
             return true;
         }
 
         if (tokens.size() >= 4 && tokens[2] == "gate" && tokens[3] == "on")
         {
-            value = strip.gate.on;
+            value = strip.gate.on.load(std::memory_order_relaxed);
             return true;
         }
 
@@ -1129,6 +1175,217 @@ bool ConsoleModel::getString(const juce::String& path, juce::String& value) cons
     }
 
     return false;
+}
+
+namespace
+{
+bool mirrorsAcrossLink(const juce::StringArray& tokens)
+{
+    if (tokens.size() < 3 || tokens[0] != "ch")
+        return false;
+
+    if (tokens[2] == "mix" && tokens.size() >= 4 && tokens[3] == "pan")
+        return false;
+
+    if (tokens[2] == "mix" && tokens.size() >= 4 && tokens[3].containsOnly("0123456789"))
+        return false;
+
+    return tokens[2] == "mix" || tokens[2] == "preamp" || tokens[2] == "delay"
+        || tokens[2] == "gate" || tokens[2] == "dyn" || tokens[2] == "eq";
+}
+} // namespace
+
+bool ConsoleModel::isChannelLinked(int channelIndex) const noexcept
+{
+    if (channelIndex < 0 || channelIndex >= numChannels)
+        return false;
+
+    return channelLink[(size_t) (channelIndex / 2)].load(std::memory_order_relaxed) != 0;
+}
+
+void ConsoleModel::setChannelLinked(int channelIndex, bool linked)
+{
+    if (channelIndex < 0 || channelIndex >= numChannels)
+        return;
+
+    const int pair = channelIndex / 2;
+    setInt("/config/chlink/" + juce::String(pair + 1).paddedLeft('0', 2), linked ? 1 : 0);
+}
+
+void ConsoleModel::duplicateProcessing(int fromIndex, int toIndex, bool includePan)
+{
+    if (fromIndex < 0 || toIndex < 0 || fromIndex >= numChannels || toIndex >= numChannels || fromIndex == toIndex)
+        return;
+
+    const auto& from = channels[(size_t) fromIndex];
+    auto& to = channels[(size_t) toIndex];
+    to.trim.store(from.trim.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    to.invert.store(from.invert.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    to.fader.store(from.fader.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    to.on.store(from.on.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    to.mainAssign.store(from.mainAssign.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    to.hpf.store(from.hpf.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    to.hpfOn.store(from.hpfOn.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    to.delayOn.store(from.delayOn.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    to.delayTime.store(from.delayTime.load(std::memory_order_relaxed), std::memory_order_relaxed);
+
+    if (includePan)
+        to.pan.store(from.pan.load(std::memory_order_relaxed), std::memory_order_relaxed);
+
+    to.gate.on.store(from.gate.on.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    to.gate.threshold.store(from.gate.threshold.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    to.gate.range.store(from.gate.range.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    to.gate.attack.store(from.gate.attack.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    to.gate.hold.store(from.gate.hold.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    to.gate.release.store(from.gate.release.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    to.comp.on.store(from.comp.on.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    to.comp.threshold.store(from.comp.threshold.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    to.comp.ratio.store(from.comp.ratio.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    to.comp.attack.store(from.comp.attack.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    to.comp.hold.store(from.comp.hold.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    to.comp.release.store(from.comp.release.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    to.comp.knee.store(from.comp.knee.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    to.comp.makeup.store(from.comp.makeup.load(std::memory_order_relaxed), std::memory_order_relaxed);
+
+    for (int band = 0; band < numChannelEqBands; ++band)
+    {
+        to.eq[band].type.store(from.eq[band].type.load(std::memory_order_relaxed), std::memory_order_relaxed);
+        to.eq[band].freq.store(from.eq[band].freq.load(std::memory_order_relaxed), std::memory_order_relaxed);
+        to.eq[band].gain.store(from.eq[band].gain.load(std::memory_order_relaxed), std::memory_order_relaxed);
+        to.eq[band].q.store(from.eq[band].q.load(std::memory_order_relaxed), std::memory_order_relaxed);
+        to.eq[band].on.store(from.eq[band].on.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    }
+}
+
+void ConsoleModel::mirrorFloat(const juce::String& path, float value)
+{
+    if (suppressMirror)
+        return;
+
+    const auto tokens = tokensOf(path);
+
+    if (! mirrorsAcrossLink(tokens))
+        return;
+
+    const int index = indexOf(tokens[1], numChannels);
+
+    if (index < 0 || ! isChannelLinked(index))
+        return;
+
+    auto partner = tokens;
+    partner.set(1, juce::String((index ^ 1) + 1).paddedLeft('0', 2));
+    suppressMirror = true;
+    assignFloat("/" + partner.joinIntoString("/"), value);
+    suppressMirror = false;
+}
+
+void ConsoleModel::mirrorInt(const juce::String& path, int value)
+{
+    if (suppressMirror)
+        return;
+
+    const auto tokens = tokensOf(path);
+
+    if (! mirrorsAcrossLink(tokens))
+        return;
+
+    const int index = indexOf(tokens[1], numChannels);
+
+    if (index < 0 || ! isChannelLinked(index))
+        return;
+
+    auto partner = tokens;
+    partner.set(1, juce::String((index ^ 1) + 1).paddedLeft('0', 2));
+    suppressMirror = true;
+    assignInt("/" + partner.joinIntoString("/"), value);
+    suppressMirror = false;
+}
+
+void ConsoleModel::copyChannel(int channelIndex)
+{
+    if (channelIndex < 0 || channelIndex >= numChannels)
+        return;
+
+    const auto& from = channels[(size_t) channelIndex];
+    clipboard.trim = from.trim.load(std::memory_order_relaxed);
+    clipboard.fader = from.fader.load(std::memory_order_relaxed);
+    clipboard.pan = from.pan.load(std::memory_order_relaxed);
+    clipboard.hpf = from.hpf.load(std::memory_order_relaxed);
+    clipboard.delayTime = from.delayTime.load(std::memory_order_relaxed);
+    clipboard.invert = from.invert.load(std::memory_order_relaxed);
+    clipboard.on = from.on.load(std::memory_order_relaxed);
+    clipboard.mainAssign = from.mainAssign.load(std::memory_order_relaxed);
+    clipboard.hpfOn = from.hpfOn.load(std::memory_order_relaxed);
+    clipboard.delayOn = from.delayOn.load(std::memory_order_relaxed);
+    clipboard.gateOn = from.gate.on.load(std::memory_order_relaxed);
+    clipboard.gateThr = from.gate.threshold.load(std::memory_order_relaxed);
+    clipboard.gateRange = from.gate.range.load(std::memory_order_relaxed);
+    clipboard.gateAttack = from.gate.attack.load(std::memory_order_relaxed);
+    clipboard.gateHold = from.gate.hold.load(std::memory_order_relaxed);
+    clipboard.gateRelease = from.gate.release.load(std::memory_order_relaxed);
+    clipboard.compOn = from.comp.on.load(std::memory_order_relaxed);
+    clipboard.compThr = from.comp.threshold.load(std::memory_order_relaxed);
+    clipboard.compRatio = from.comp.ratio.load(std::memory_order_relaxed);
+    clipboard.compAttack = from.comp.attack.load(std::memory_order_relaxed);
+    clipboard.compHold = from.comp.hold.load(std::memory_order_relaxed);
+    clipboard.compRelease = from.comp.release.load(std::memory_order_relaxed);
+    clipboard.compKnee = from.comp.knee.load(std::memory_order_relaxed);
+    clipboard.compMakeup = from.comp.makeup.load(std::memory_order_relaxed);
+
+    for (int band = 0; band < numChannelEqBands; ++band)
+    {
+        clipboard.eqType[band] = from.eq[band].type.load(std::memory_order_relaxed);
+        clipboard.eqFreq[band] = from.eq[band].freq.load(std::memory_order_relaxed);
+        clipboard.eqGain[band] = from.eq[band].gain.load(std::memory_order_relaxed);
+        clipboard.eqQ[band] = from.eq[band].q.load(std::memory_order_relaxed);
+        clipboard.eqOn[band] = from.eq[band].on.load(std::memory_order_relaxed);
+    }
+
+    clipboardReady = true;
+}
+
+void ConsoleModel::pasteChannel(int channelIndex)
+{
+    if (! clipboardReady || channelIndex < 0 || channelIndex >= numChannels)
+        return;
+
+    auto& to = channels[(size_t) channelIndex];
+    to.trim.store(clipboard.trim, std::memory_order_relaxed);
+    to.fader.store(clipboard.fader, std::memory_order_relaxed);
+    to.pan.store(clipboard.pan, std::memory_order_relaxed);
+    to.hpf.store(clipboard.hpf, std::memory_order_relaxed);
+    to.delayTime.store(clipboard.delayTime, std::memory_order_relaxed);
+    to.invert.store(clipboard.invert, std::memory_order_relaxed);
+    to.on.store(clipboard.on, std::memory_order_relaxed);
+    to.mainAssign.store(clipboard.mainAssign, std::memory_order_relaxed);
+    to.hpfOn.store(clipboard.hpfOn, std::memory_order_relaxed);
+    to.delayOn.store(clipboard.delayOn, std::memory_order_relaxed);
+    to.gate.on.store(clipboard.gateOn, std::memory_order_relaxed);
+    to.gate.threshold.store(clipboard.gateThr, std::memory_order_relaxed);
+    to.gate.range.store(clipboard.gateRange, std::memory_order_relaxed);
+    to.gate.attack.store(clipboard.gateAttack, std::memory_order_relaxed);
+    to.gate.hold.store(clipboard.gateHold, std::memory_order_relaxed);
+    to.gate.release.store(clipboard.gateRelease, std::memory_order_relaxed);
+    to.comp.on.store(clipboard.compOn, std::memory_order_relaxed);
+    to.comp.threshold.store(clipboard.compThr, std::memory_order_relaxed);
+    to.comp.ratio.store(clipboard.compRatio, std::memory_order_relaxed);
+    to.comp.attack.store(clipboard.compAttack, std::memory_order_relaxed);
+    to.comp.hold.store(clipboard.compHold, std::memory_order_relaxed);
+    to.comp.release.store(clipboard.compRelease, std::memory_order_relaxed);
+    to.comp.knee.store(clipboard.compKnee, std::memory_order_relaxed);
+    to.comp.makeup.store(clipboard.compMakeup, std::memory_order_relaxed);
+
+    for (int band = 0; band < numChannelEqBands; ++band)
+    {
+        to.eq[band].type.store(clipboard.eqType[band], std::memory_order_relaxed);
+        to.eq[band].freq.store(clipboard.eqFreq[band], std::memory_order_relaxed);
+        to.eq[band].gain.store(clipboard.eqGain[band], std::memory_order_relaxed);
+        to.eq[band].q.store(clipboard.eqQ[band], std::memory_order_relaxed);
+        to.eq[band].on.store(clipboard.eqOn[band], std::memory_order_relaxed);
+    }
+
+    if (isChannelLinked(channelIndex))
+        duplicateProcessing(channelIndex, channelIndex ^ 1, true);
 }
 
 } // namespace vc

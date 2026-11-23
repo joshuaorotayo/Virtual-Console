@@ -248,6 +248,14 @@ ChannelStrip::ChannelStrip (ConsoleModel& modelToUse, MixEngine& engineToUse, in
     solo.setToggleState (soloed != 0, juce::dontSendNotification);
     solo.onClick = [this] { model.setInt (soloPath (index), solo.getToggleState() ? 1 : 0); };
     addAndMakeVisible (solo);
+
+    edit.setTooltip ("Channel processing");
+    edit.onClick = [this]
+    {
+        if (onEdit != nullptr)
+            onEdit();
+    };
+    addAndMakeVisible (edit);
 }
 
 void ChannelStrip::setSourceNames (const juce::StringArray& names)
@@ -277,6 +285,7 @@ void ChannelStrip::resized()
     area.removeFromTop (10);
     name.setBounds (area.removeFromTop (22));
     sourceBox.setBounds (area.removeFromTop (24).reduced (0, 2));
+    edit.setBounds (area.removeFromTop (22).reduced (18, 1));
     trimLabel.setBounds (area.removeFromTop (14));
     trim.setBounds (area.removeFromTop (46));
     panLabel.setBounds (area.removeFromTop (14));

@@ -46,6 +46,12 @@ public:
         }
     }
 
+    void setEditHandler (std::function<void (int)> handler)
+    {
+        for (int i = 0; i < numChannels; ++i)
+            strips[(size_t) i]->onEdit = [handler, i] { if (handler != nullptr) handler (i); };
+    }
+
     void resized() override
     {
         constexpr int width = 128;
@@ -190,12 +196,17 @@ MainComponent::MainComponent()
 
     mixerButton.setClickingTogglesState (true);
     mixerButton.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xff3d6f8f));
-    mixerButton.onClick = [this] { showPage (false); };
+    mixerButton.onClick = [this] { showPage (Page::mixer); };
     addAndMakeVisible (mixerButton);
+
+    channelButton.setClickingTogglesState (true);
+    channelButton.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xff3d6f8f));
+    channelButton.onClick = [this] { showPage (Page::channel); };
+    addAndMakeVisible (channelButton);
 
     sourcesButton.setClickingTogglesState (true);
     sourcesButton.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xff3d6f8f));
-    sourcesButton.onClick = [this] { showPage (true); };
+    sourcesButton.onClick = [this] { showPage (Page::sources); };
     addAndMakeVisible (sourcesButton);
 
     for (auto* label : { &outputLabel, &listenLabel, &mainLabel })
@@ -300,9 +311,13 @@ MainComponent::MainComponent()
     addAndMakeVisible (sourceList);
 
     strips = std::make_unique<StripBank> (model, engine);
+    strips->setEditHandler ([this] (int channel) { editChannel (channel); });
     viewport.setViewedComponent (strips.get(), false);
     viewport.setScrollBarsShown (false, true);
     addAndMakeVisible (viewport);
+
+    channelEditor = std::make_unique<ChannelEditor> (model);
+    addChildComponent (channelEditor.get());
 
     mainMeter.readLevel = [this] { return engine.getMainMeter(); };
     addAndMakeVisible (mainMeter);
@@ -345,7 +360,7 @@ MainComponent::MainComponent()
     deviceManager.addAudioCallback (&player);
     refreshOutputs();
     refreshSources();
-    showPage (false);
+    showPage (Page::mixer);
     status.setText (deviceError.isNotEmpty() ? deviceError : statusText(), juce::dontSendNotification);
     startTimerHz (30);
     setSize (1280, 800);
@@ -379,7 +394,9 @@ void MainComponent::resized()
     outputLabel.setBounds (top.removeFromRight (56));
 
     auto tabs = area.removeFromTop (36).reduced (10, 4);
-    mixerButton.setBounds (tabs.removeFromLeft (96).reduced (0, 0));
+    mixerButton.setBounds (tabs.removeFromLeft (96));
+    tabs.removeFromLeft (6);
+    channelButton.setBounds (tabs.removeFromLeft (104));
     tabs.removeFromLeft (6);
     sourcesButton.setBounds (tabs.removeFromLeft (104));
 
@@ -393,23 +410,32 @@ void MainComponent::resized()
 
     status.setBounds (area.removeFromBottom (24).reduced (10, 2));
 
-    const bool sources = showingSources;
+    const bool sources = page == Page::sources;
+    const bool channel = page == Page::channel;
+    const bool mixer = page == Page::mixer;
     sourceHeading.setVisible (sources);
     emptySources.setVisible (sources && model.getNumSources() == 0);
     sourceList.setVisible (sources && model.getNumSources() > 0);
-    viewport.setVisible (! sources);
-    mainLabel.setVisible (! sources);
-    mainMeter.setVisible (! sources);
-    mainFader.setVisible (! sources);
-    mainScale.setVisible (! sources);
-    mainMute.setVisible (! sources);
+    viewport.setVisible (mixer);
+    mainLabel.setVisible (mixer);
+    mainMeter.setVisible (mixer);
+    mainFader.setVisible (mixer);
+    mainScale.setVisible (mixer);
+    mainMute.setVisible (mixer);
+    channelEditor->setVisible (channel);
 
     if (sources)
     {
-        auto page = area.reduced (24, 12);
-        sourceHeading.setBounds (page.removeFromTop (36));
-        emptySources.setBounds (page.removeFromTop (48));
-        sourceList.setBounds (page);
+        auto pageArea = area.reduced (24, 12);
+        sourceHeading.setBounds (pageArea.removeFromTop (36));
+        emptySources.setBounds (pageArea.removeFromTop (48));
+        sourceList.setBounds (pageArea);
+        return;
+    }
+
+    if (channel)
+    {
+        channelEditor->setBounds (area);
         return;
     }
 
@@ -425,12 +451,24 @@ void MainComponent::resized()
     strips->setSize (strips->widthForChannels(), stripHeight);
 }
 
-void MainComponent::showPage (bool sources)
+void MainComponent::showPage (Page next)
 {
-    showingSources = sources;
-    mixerButton.setToggleState (! sources, juce::dontSendNotification);
-    sourcesButton.setToggleState (sources, juce::dontSendNotification);
+    page = next;
+    mixerButton.setToggleState (page == Page::mixer, juce::dontSendNotification);
+    channelButton.setToggleState (page == Page::channel, juce::dontSendNotification);
+    sourcesButton.setToggleState (page == Page::sources, juce::dontSendNotification);
+
+    if (page == Page::channel)
+        channelEditor->refresh();
+
     resized();
+}
+
+void MainComponent::editChannel (int channelIndex)
+{
+    editingChannel = channelIndex;
+    channelEditor->setChannel (channelIndex);
+    showPage (Page::channel);
 }
 
 void MainComponent::removeSourceById (int sourceId)
@@ -456,6 +494,9 @@ void MainComponent::timerCallback()
         status.setText (next, juce::dontSendNotification);
 
     syncTransport();
+
+    if (page == Page::channel)
+        channelEditor->refresh();
 }
 
 void MainComponent::syncTransport()
@@ -523,7 +564,7 @@ void MainComponent::refreshSources()
     sourceList.updateContent();
     sourceList.repaint();
 
-    if (showingSources)
+    if (page == Page::sources)
         resized();
 }
 

@@ -22,6 +22,7 @@ void MixEngine::ensureCapacity(int samples)
 
     scratchCapacity = samples;
     scratch.assign((size_t) maxSources * (size_t) scratchCapacity, 0.0f);
+    processed.assign((size_t) numChannels * (size_t) scratchCapacity, 0.0f);
     mainBufL.assign((size_t) scratchCapacity, 0.0f);
     mainBufR.assign((size_t) scratchCapacity, 0.0f);
     soloBufL.assign((size_t) scratchCapacity, 0.0f);
@@ -34,6 +35,9 @@ void MixEngine::prepareToPlay(int samplesPerBlockExpected, double newSampleRate)
     sampleRate = newSampleRate > 0.0 ? newSampleRate : 48000.0;
     smoothCoeff = 1.0f - std::exp(-1.0f / (float) (sampleRate * 0.02));
     ensureCapacity(std::max(samplesPerBlockExpected, 512));
+
+    for (auto& strip : channelDsp)
+        strip.prepare(sampleRate);
 
     for (int i = 0; i < model.getNumSources(); ++i)
         sources[(size_t) i].prepare(sampleRate);
@@ -265,15 +269,13 @@ void MixEngine::channelTargets(int index, float& pflL, float& pflR, float& outL,
     float panR = 0.0f;
     panGains(strip.pan.load(std::memory_order_relaxed), panL, panR);
 
-    const float trim = trimToGain(strip.trim.load(std::memory_order_relaxed));
-    const float polarity = strip.invert.load(std::memory_order_relaxed) != 0 ? -1.0f : 1.0f;
     const float fader = faderToGain(strip.fader.load(std::memory_order_relaxed));
     const float enabled = strip.on.load(std::memory_order_relaxed) != 0 ? 1.0f : 0.0f;
 
-    pflL = trim * polarity * panL;
-    pflR = trim * polarity * panR;
-    outL = pflL * fader * enabled;
-    outR = pflR * fader * enabled;
+    pflL = panL;
+    pflR = panR;
+    outL = panL * fader * enabled;
+    outR = panR * fader * enabled;
 }
 
 void MixEngine::snapSmoothers() noexcept
@@ -338,6 +340,39 @@ void MixEngine::processChunk(float* left, float* right, int numSamples, juce::in
         }
     }
 
+    std::fill_n(processed.begin(), (size_t) numChannels * (size_t) scratchCapacity, 0.0f);
+
+    for (int channel = 0; channel < numChannels; ++channel)
+    {
+        if (channel + 1 < numChannels && model.isChannelLinked(channel) && (channel % 2) == 0)
+        {
+            const int partner = channel + 1;
+            const int sourceA = sourceOf[(size_t) channel];
+            const int sourceB = sourceOf[(size_t) partner];
+            const float* inputA = sourceA >= 0 ? scratch.data() + (size_t) sourceA * (size_t) scratchCapacity : nullptr;
+            const float* inputB = sourceB >= 0 ? scratch.data() + (size_t) sourceB * (size_t) scratchCapacity : nullptr;
+            channelDsp[(size_t) channel].processLinked(channelDsp[(size_t) partner],
+                                                       inputA,
+                                                       inputB,
+                                                       processed.data() + (size_t) channel * (size_t) scratchCapacity,
+                                                       processed.data() + (size_t) partner * (size_t) scratchCapacity,
+                                                       numSamples,
+                                                       model.channel(channel));
+            ++channel;
+            continue;
+        }
+
+        const int source = sourceOf[(size_t) channel];
+
+        if (source < 0)
+            continue;
+
+        channelDsp[(size_t) channel].process(scratch.data() + (size_t) source * (size_t) scratchCapacity,
+                                             processed.data() + (size_t) channel * (size_t) scratchCapacity,
+                                             numSamples,
+                                             model.channel(channel));
+    }
+
     std::fill_n(mainBufL.begin(), numSamples, 0.0f);
     std::fill_n(mainBufR.begin(), numSamples, 0.0f);
     std::fill_n(soloBufL.begin(), numSamples, 0.0f);
@@ -383,7 +418,7 @@ void MixEngine::processChunk(float* left, float* right, int numSamples, juce::in
             if (source < 0)
                 continue;
 
-            const float input = scratch[(size_t) source * (size_t) scratchCapacity + (size_t) sample];
+            const float input = processed[(size_t) channel * (size_t) scratchCapacity + (size_t) sample];
             const float leftSample = input * state.curL;
             const float rightSample = input * state.curR;
             peaks[(size_t) channel] = std::max(peaks[(size_t) channel], std::max(std::abs(leftSample), std::abs(rightSample)));

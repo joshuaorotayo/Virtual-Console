@@ -1,4 +1,5 @@
 #include "engine/MixEngine.h"
+#include "model/DspLaw.h"
 #include "model/FaderLaw.h"
 
 #include <juce_audio_formats/juce_audio_formats.h>
@@ -316,9 +317,172 @@ public:
     }
 };
 
+class ChannelDspTest : public juce::UnitTest
+{
+public:
+    ChannelDspTest() : juce::UnitTest ("Channel DSP", "VirtualConsole") {}
+
+    void runTest() override
+    {
+        beginTest ("equaliser, filter, dynamics, delay, link and copy");
+
+        const float eqFreq = std::log (1000.0f / 20.0f) / std::log (20000.0f / 20.0f);
+        auto boosted = renderTone (4800, 1000.0f, [&] (ConsoleModel& model)
+        {
+            model.setFloat ("/ch/01/eq/3/f", eqFreq);
+            model.setFloat ("/ch/01/eq/3/g", 1.0f);
+            model.setFloat ("/ch/01/eq/3/q", 0.5f);
+        });
+        expectWithinAbsoluteError (tailPeak (boosted), std::pow (10.0f, 15.0f / 20.0f), 0.6f, "1 kHz peak boost");
+
+        auto filtered = renderTone (4000, 100.0f, [] (ConsoleModel& model)
+        {
+            model.setInt ("/ch/01/preamp/hpon", 1);
+            model.setFloat ("/ch/01/preamp/hpf", 1.0f);
+        });
+        expectLessThan (tailPeak (filtered), 0.2f, "high pass attenuates 100 Hz");
+
+        auto closed = renderConstant (8000, 0.01f, [] (ConsoleModel& model)
+        {
+            model.setInt ("/ch/01/gate/on", 1);
+            model.setFloat ("/ch/01/gate/thr", 0.75f);
+            model.setFloat ("/ch/01/gate/range", 1.0f);
+            model.setFloat ("/ch/01/gate/attack", 0.0f);
+            model.setFloat ("/ch/01/gate/release", 0.0f);
+        });
+        expectLessThan (std::abs (closed.back()), 0.002f, "gate closes a quiet signal");
+
+        auto open = renderConstant (2000, 1.0f, [] (ConsoleModel& model)
+        {
+            model.setInt ("/ch/01/gate/on", 1);
+            model.setFloat ("/ch/01/gate/thr", 0.75f);
+            model.setFloat ("/ch/01/gate/range", 1.0f);
+            model.setFloat ("/ch/01/gate/attack", 0.0f);
+        });
+        expectWithinAbsoluteError (open.back(), 1.0f, 0.05f, "gate stays open on a full-scale signal");
+
+        const float ratio = std::log ((4.0f / 1.1f)) / std::log (100.0f / 1.1f);
+        auto compressed = renderConstant (4000, 1.0f, [ratio] (ConsoleModel& model)
+        {
+            model.setInt ("/ch/01/dyn/on", 1);
+            model.setFloat ("/ch/01/dyn/thr", 0.9f);
+            model.setFloat ("/ch/01/dyn/ratio", ratio);
+            model.setFloat ("/ch/01/dyn/knee", 0.0f);
+            model.setFloat ("/ch/01/dyn/mgain", 0.0f);
+            model.setFloat ("/ch/01/dyn/attack", 0.0f);
+        });
+        expectWithinAbsoluteError (compressed.back(), std::pow (10.0f, -4.5f / 20.0f), 0.05f, "compressor settles near 4:1");
+
+        const float delayUnit = std::log (0.01f / 0.0003f) / std::log (0.5f / 0.0003f);
+        std::vector<float> impulse (2000, 0.0f);
+        impulse[0] = 1.0f;
+        auto delayed = renderSamples (impulse, [&] (ConsoleModel& model)
+        {
+            model.setInt ("/ch/01/delay/on", 1);
+            model.setFloat ("/ch/01/delay/time", delayUnit);
+        });
+        float early = 0.0f;
+
+        for (int i = 0; i < 400; ++i)
+            early = std::max (early, std::abs (delayed[(size_t) i]));
+
+        int peakIndex = 0;
+
+        for (int i = 1; i < (int) delayed.size(); ++i)
+            if (std::abs (delayed[(size_t) i]) > std::abs (delayed[(size_t) peakIndex]))
+                peakIndex = i;
+
+        const int expectedDelay = (int) std::lround (delaySeconds (delayUnit) * 48000.0f);
+        expectLessThan (early, 0.001f, "delay is silent before the impulse returns");
+        expectWithinAbsoluteError ((float) peakIndex, (float) expectedDelay, 2.0f, "delay lands near 10 ms");
+
+        ConsoleModel linked;
+        linked.setFloat ("/ch/01/eq/3/g", 0.9f);
+        linked.setFloat ("/ch/01/mix/pan", 0.1f);
+        linked.setFloat ("/ch/02/mix/pan", 0.8f);
+        linked.setChannelLinked (0, true);
+        float partnerGain = 0.0f;
+        float partnerPan = 0.0f;
+        expect (linked.getFloat ("/ch/02/eq/3/g", partnerGain));
+        expect (linked.getFloat ("/ch/02/mix/pan", partnerPan));
+        expectWithinAbsoluteError (partnerGain, 0.9f, 1.0e-4f, "link copies equaliser gain");
+        expectWithinAbsoluteError (partnerPan, 0.8f, 1.0e-4f, "link leaves pan independent");
+        linked.setFloat ("/ch/01/mix/fader", 0.2f);
+        float mirroredFader = 0.0f;
+        expect (linked.getFloat ("/ch/02/mix/fader", mirroredFader));
+        expectWithinAbsoluteError (mirroredFader, 0.2f, 1.0e-4f, "link keeps faders together");
+
+        ConsoleModel clipboard;
+        clipboard.addSource ("keep", "C:/keep.wav");
+        clipboard.setChannelSource (1, 0);
+        clipboard.setFloat ("/ch/01/mix/fader", 0.22f);
+        clipboard.setFloat ("/ch/01/mix/pan", 0.15f);
+        clipboard.copyChannel (0);
+        clipboard.pasteChannel (1);
+        float pasted = 0.0f;
+        expect (clipboard.getFloat ("/ch/02/mix/fader", pasted));
+        expectWithinAbsoluteError (pasted, 0.22f, 1.0e-4f, "paste copies the fader");
+        expectEquals (clipboard.getChannelSource (1), 0, "paste leaves the source assignment");
+    }
+
+private:
+    template <typename Setup>
+    std::vector<float> renderSamples (const std::vector<float>& input, Setup setup)
+    {
+        ConsoleModel model;
+        MixEngine engine (model);
+        engine.prepareToPlay (128, 48000.0);
+        const int source = engine.adoptMemorySource (input, 48000.0, "dsp");
+        model.setChannelSource (0, source);
+        model.setFloat ("/ch/01/mix/pan", 0.0f);
+        setup (model);
+        engine.play();
+        engine.snapSmoothers();
+        std::vector<float> output (input.size(), 0.0f);
+
+        for (size_t offset = 0; offset < output.size(); offset += 128)
+        {
+            const int count = (int) std::min<size_t> (128, output.size() - offset);
+            auto block = renderBlock (engine, count);
+            std::copy (block.left.begin(), block.left.end(), output.begin() + (std::ptrdiff_t) offset);
+        }
+
+        return output;
+    }
+
+    template <typename Setup>
+    std::vector<float> renderTone (int samples, float hertz, Setup setup)
+    {
+        std::vector<float> tone ((size_t) samples);
+
+        for (int i = 0; i < samples; ++i)
+            tone[(size_t) i] = std::sin (2.0f * 3.14159265f * hertz * (float) i / 48000.0f);
+
+        return renderSamples (tone, setup);
+    }
+
+    template <typename Setup>
+    std::vector<float> renderConstant (int samples, float value, Setup setup)
+    {
+        return renderSamples (std::vector<float> ((size_t) samples, value), setup);
+    }
+
+    static float tailPeak (const std::vector<float>& samples)
+    {
+        const int begin = std::max (0, (int) samples.size() - 480);
+        float peak = 0.0f;
+
+        for (int i = begin; i < (int) samples.size(); ++i)
+            peak = std::max (peak, std::abs (samples[(size_t) i]));
+
+        return peak;
+    }
+};
+
 void registerVirtualConsoleTests()
 {
     static MixEngineTest mixEngineTest;
+    static ChannelDspTest channelDspTest;
 }
 
 } // namespace vc

@@ -30,24 +30,24 @@ enum class ListenMode
 
 struct EqBand
 {
-    int type = 2;
-    float freq = 0.5f;
-    float gain = 0.5f;
-    float q = 0.5f;
-    int on = 1;
+    std::atomic<int> type { 2 };
+    std::atomic<float> freq { 0.5f };
+    std::atomic<float> gain { 0.5f };
+    std::atomic<float> q { 0.5f };
+    std::atomic<int> on { 1 };
 };
 
 struct Dynamics
 {
-    int on = 0;
-    float threshold = 0.75f;
-    float ratio = 0.5f;
-    float attack = 0.2f;
-    float hold = 0.2f;
-    float release = 0.5f;
-    float range = 0.5f;
-    float knee = 0.2f;
-    float makeup = 0.5f;
+    std::atomic<int> on { 0 };
+    std::atomic<float> threshold { 0.75f };
+    std::atomic<float> ratio { 0.5f };
+    std::atomic<float> attack { 0.2f };
+    std::atomic<float> hold { 0.2f };
+    std::atomic<float> release { 0.5f };
+    std::atomic<float> range { 0.5f };
+    std::atomic<float> knee { 0.2f };
+    std::atomic<float> makeup { 0.5f };
 };
 
 struct MixPoint
@@ -66,10 +66,10 @@ struct Channel : MixPoint
     std::atomic<int> invert { 0 };
     std::atomic<int> source { -1 };
     std::atomic<int> mainAssign { 1 };
-    float hpf = 0.2f;
-    int hpfOn = 0;
-    int delayOn = 0;
-    float delayTime = 0.0f;
+    std::atomic<float> hpf { 0.2f };
+    std::atomic<int> hpfOn { 0 };
+    std::atomic<int> delayOn { 0 };
+    std::atomic<float> delayTime { 0.0f };
     Dynamics gate {};
     float sendLevel[numBuses] {};
     int sendPre[numBuses] {};

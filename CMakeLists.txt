@@ -25,6 +25,7 @@ set(VC_CORE_SOURCES
     src/model/ConsoleModel.cpp
     src/engine/SharedSource.cpp
     src/engine/MixEngine.cpp
+    src/engine/ChannelDsp.cpp
 )
 
 function(vc_configure_target target)
@@ -53,6 +54,7 @@ target_sources(VirtualConsole PRIVATE
     src/Main.cpp
     src/ui/MainComponent.cpp
     src/ui/ChannelStrip.cpp
+    src/ui/ChannelEditor.cpp
     ${VC_CORE_SOURCES}
 )
 
