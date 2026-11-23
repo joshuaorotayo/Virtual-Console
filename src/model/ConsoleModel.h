@@ -44,11 +44,17 @@ public:
     void removeSource(int index);
     int getNumSources() const noexcept { return sourceCount; }
     int getSourceId(int index) const;
+    int findSourceByFile(const juce::String& filePath) const;
     juce::String getSourceName(int index) const;
     juce::String getSourceFile(int index) const;
 
-    void setChannelSource(int channelIndex, int sourceIndex) noexcept;
+    void setChannelSource(int channelIndex, int inputIndex) noexcept;
     int getChannelSource(int channelIndex) const noexcept;
+    void setInputSource(int inputIndex, int sourceIndex) noexcept;
+    int getInputSource(int inputIndex) const noexcept;
+    int inputForSource(int sourceIndex) const noexcept;
+    int firstFreeInput() const noexcept;
+    static juce::String inputName(int inputIndex);
 
     juce::String getChannelName(int index) const;
     void setChannelName(int index, const juce::String& name);
@@ -76,6 +82,7 @@ private:
     std::atomic<int> listenMode { (int) ListenMode::automatic };
     int soloMode = 0;
     std::atomic<int> channelLink[16] {};
+    std::atomic<int> inputSource[numRoutableInputs];
     bool suppressMirror = false;
     bool clipboardReady = false;
 

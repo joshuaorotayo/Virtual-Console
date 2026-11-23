@@ -2,6 +2,8 @@
 #include "model/DspLaw.h"
 #include "model/FaderLaw.h"
 
+#include <initializer_list>
+
 #include <juce_audio_formats/juce_audio_formats.h>
 
 namespace vc
@@ -29,6 +31,14 @@ StereoBlock renderBlock (MixEngine& engine, int samples)
     block.right.assign ((size_t) samples, 0.0f);
     engine.process (block.left.data(), block.right.data(), samples);
     return block;
+}
+
+void routeSource (ConsoleModel& model, int sourceIndex, int inputIndex, std::initializer_list<int> channels)
+{
+    model.setInputSource (inputIndex, sourceIndex);
+
+    for (int channel : channels)
+        model.setChannelSource (channel, inputIndex);
 }
 } // namespace
 
@@ -104,6 +114,16 @@ public:
             expect (! model.setString ("/config/aes50/A/box", "not-a-box"));
             expect (model.getString ("/config/aes50/A/box", boxName));
             expectEquals (boxName, juce::String ("DL32"));
+            expectEquals (model.addSource ("vocal", "C:/audio/vocal.wav"), 0);
+            expect (model.addSource ("again", "C:/audio/vocal.wav") < 0);
+            expectEquals (model.addSource ("room", "C:/audio/room.wav"), 1);
+            model.setInputSource (0, 0);
+            model.setInputSource (numLocalInputs, 1);
+            expectEquals (model.getInputSource (0), 0);
+            expectEquals (model.inputForSource (1), numLocalInputs);
+            expectEquals (model.inputName (0), juce::String ("Local 1"));
+            expectEquals (model.inputName (numLocalInputs), juce::String ("Aux 1"));
+            expectEquals (model.getChannelSource (0), 0);
         }
 
         beginTest ("one buffer feeds two independent strips");
@@ -113,8 +133,7 @@ public:
             engine.prepareToPlay (64, 48000.0);
             const int source = engine.adoptMemorySource ({ 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f }, 48000.0, "steps");
             expectEquals (source, 0);
-            model.setChannelSource (0, source);
-            model.setChannelSource (1, source);
+            routeSource (model, source, 0, { 0, 1 });
             expect (model.setFloat ("/ch/01/mix/pan", 0.0f));
             expect (model.setFloat ("/ch/02/mix/pan", 1.0f));
             expect (model.setFloat ("/ch/01/mix/fader", 0.75f));
@@ -140,16 +159,20 @@ public:
             engine.prepareToPlay (32, 48000.0);
             const int first = engine.adoptMemorySource (std::vector<float> (16, 1.0f), 48000.0, "first");
             const int second = engine.adoptMemorySource (std::vector<float> (16, 0.5f), 48000.0, "second");
-            model.setChannelSource (0, first);
-            model.setChannelSource (1, second);
+            model.setInputSource (0, first);
+            model.setInputSource (1, second);
+            model.setChannelSource (0, 0);
+            model.setChannelSource (1, 1);
             expect (model.setFloat ("/ch/01/mix/pan", 1.0f));
             expect (model.setFloat ("/ch/02/mix/pan", 0.0f));
             engine.play();
             engine.removeSource (first);
             expectEquals (model.getNumSources(), 1);
             expectEquals (model.getSourceName (0), juce::String ("second"));
-            expectEquals (model.getChannelSource (0), -1);
-            expectEquals (model.getChannelSource (1), 0);
+            expectEquals (model.getChannelSource (0), 0);
+            expectEquals (model.getChannelSource (1), 1);
+            expectEquals (model.getInputSource (0), -1);
+            expectEquals (model.getInputSource (1), 0);
             engine.snapSmoothers();
             const auto kept = renderBlock (engine, 4);
             expectSamples (*this, kept.left, std::vector<float> (4, 0.5f), "kept source");
@@ -162,7 +185,7 @@ public:
             MixEngine engine (model);
             engine.prepareToPlay (32, 48000.0);
             const int source = engine.adoptMemorySource ({ 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f }, 48000.0, "counted");
-            model.setChannelSource (0, source);
+            routeSource (model, source, 0, { 0 });
             expect (model.setFloat ("/ch/01/mix/pan", 0.0f));
             engine.snapSmoothers();
 
@@ -198,8 +221,7 @@ public:
             MixEngine engine (model);
             engine.prepareToPlay (32, 48000.0);
             const int source = engine.adoptMemorySource (std::vector<float> (64, 1.0f), 48000.0, "ones");
-            model.setChannelSource (0, source);
-            model.setChannelSource (1, source);
+            routeSource (model, source, 0, { 0, 1 });
             expect (model.setFloat ("/ch/01/mix/pan", 0.0f));
             expect (model.setFloat ("/ch/02/mix/pan", 1.0f));
             expect (model.setFloat ("/ch/01/mix/fader", 0.75f));
@@ -301,8 +323,9 @@ public:
                     juce::Thread::sleep (10);
                 }
 
-                model.setChannelSource (0, source);
-                model.setChannelSource (1, source);
+                model.setInputSource (0, source);
+                model.setChannelSource (0, 0);
+                model.setChannelSource (1, 0);
                 expect (model.setFloat ("/ch/01/mix/pan", 0.0f));
                 expect (model.setFloat ("/ch/02/mix/pan", 1.0f));
                 engine.play();
@@ -433,7 +456,7 @@ private:
         MixEngine engine (model);
         engine.prepareToPlay (128, 48000.0);
         const int source = engine.adoptMemorySource (input, 48000.0, "dsp");
-        model.setChannelSource (0, source);
+        routeSource (model, source, 0, { 0 });
         model.setFloat ("/ch/01/mix/pan", 0.0f);
         setup (model);
         engine.play();

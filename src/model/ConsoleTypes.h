@@ -17,9 +17,13 @@ constexpr int numFxSlots = 8;
 constexpr int numDcas = 8;
 constexpr int numMuteGroups = 6;
 constexpr int numEqBands = 6;
-constexpr int numChannelEqBands = 4;
+constexpr int numChannelEqBands = 5;
 constexpr int numFxParams = 64;
 constexpr int maxSources = 64;
+constexpr int numLocalInputs = 32;
+constexpr int numLocalOutputs = 16;
+constexpr int numAuxOutputs = 6;
+constexpr int numRoutableInputs = numLocalInputs + numAuxIns;
 
 enum class ListenMode
 {

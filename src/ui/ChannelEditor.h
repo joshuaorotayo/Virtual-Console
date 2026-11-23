@@ -7,6 +7,7 @@
 namespace vc
 {
 
+// One shared channel surface. Selecting another channel keeps the current page.
 class ChannelEditor : public juce::Component
 {
 public:
@@ -14,23 +15,19 @@ public:
     ~ChannelEditor() override;
 
     void setChannel(int channelIndex);
-    int getChannel() const noexcept { return index; }
+    int getChannel() const noexcept;
     void refresh();
+    void setSourceNames(const juce::StringArray& names);
+
+    std::function<void(int)> onChannelChanged;
 
     void resized() override;
 
 private:
-    class Content;
+    class Surface;
 
     ConsoleModel& model;
-    int index = 0;
-    juce::Label channelLabel { {}, "Channel" };
-    juce::ComboBox channelBox;
-    juce::TextButton linkButton { "Link" };
-    juce::TextButton copyButton { "Copy" };
-    juce::TextButton pasteButton { "Paste" };
-    juce::Viewport viewport;
-    std::unique_ptr<Content> content;
+    std::unique_ptr<Surface> surface;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ChannelEditor)
 };

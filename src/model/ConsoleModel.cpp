@@ -352,12 +352,13 @@ bool getMixOn(const MixPoint& mix, const juce::StringArray& tokens, int index, i
 
 ConsoleModel::ConsoleModel()
 {
-    static constexpr float channelFreqs[] { 0.20f, 0.40f, 0.62f, 0.82f };
-    static constexpr int channelTypes[] { 1, 2, 2, 3 };
+    static constexpr float channelFreqs[] { 0.18f, 0.34f, 0.50f, 0.66f, 0.84f };
+    static constexpr int channelTypes[] { 1, 2, 2, 2, 4 };
 
     for (int i = 0; i < numChannels; ++i)
     {
         channelNames[i] = "Ch " + juce::String(i + 1);
+        channels[(size_t) i].source.store(i, std::memory_order_relaxed);
 
         for (int band = 0; band < numChannelEqBands; ++band)
         {
@@ -365,6 +366,9 @@ ConsoleModel::ConsoleModel()
             channels[(size_t) i].eq[band].type = channelTypes[band];
         }
     }
+
+    for (auto& patch : inputSource)
+        patch.store(-1, std::memory_order_relaxed);
 
     for (int i = 0; i < numBuses; ++i)
         busNames[i] = "Bus " + juce::String(i + 1);
@@ -397,7 +401,7 @@ ListenMode ConsoleModel::getListenMode() const noexcept
 
 int ConsoleModel::addSource(const juce::String& name, const juce::String& filePath)
 {
-    if (sourceCount >= maxSources)
+    if (sourceCount >= maxSources || findSourceByFile(filePath) >= 0)
         return -1;
 
     const int index = sourceCount;
@@ -419,17 +423,29 @@ void ConsoleModel::removeSource(int index)
     sources[(size_t) (sourceCount - 1)] = {};
     --sourceCount;
 
-    for (auto& channel : channels)
+    for (auto& patch : inputSource)
     {
-        int assigned = channel.source.load(std::memory_order_relaxed);
+        int assigned = patch.load(std::memory_order_relaxed);
 
         if (assigned == index)
             assigned = -1;
         else if (assigned > index)
             --assigned;
 
-        channel.source.store(assigned, std::memory_order_relaxed);
+        patch.store(assigned, std::memory_order_relaxed);
     }
+}
+
+int ConsoleModel::findSourceByFile(const juce::String& filePath) const
+{
+    if (filePath.isEmpty())
+        return -1;
+
+    for (int i = 0; i < sourceCount; ++i)
+        if (sources[(size_t) i].file.equalsIgnoreCase(filePath))
+            return i;
+
+    return -1;
 }
 
 int ConsoleModel::getSourceId(int index) const
@@ -456,15 +472,15 @@ juce::String ConsoleModel::getSourceFile(int index) const
     return sources[(size_t) index].file;
 }
 
-void ConsoleModel::setChannelSource(int channelIndex, int sourceIndex) noexcept
+void ConsoleModel::setChannelSource(int channelIndex, int inputIndex) noexcept
 {
     if (channelIndex < 0 || channelIndex >= numChannels)
         return;
 
-    if (sourceIndex < -1 || sourceIndex >= sourceCount)
-        sourceIndex = -1;
+    if (inputIndex < -1 || inputIndex >= numRoutableInputs)
+        inputIndex = -1;
 
-    channels[(size_t) channelIndex].source.store(sourceIndex, std::memory_order_relaxed);
+    channels[(size_t) channelIndex].source.store(inputIndex, std::memory_order_relaxed);
 }
 
 int ConsoleModel::getChannelSource(int channelIndex) const noexcept
@@ -473,6 +489,64 @@ int ConsoleModel::getChannelSource(int channelIndex) const noexcept
         return -1;
 
     return channels[(size_t) channelIndex].source.load(std::memory_order_relaxed);
+}
+
+void ConsoleModel::setInputSource(int inputIndex, int sourceIndex) noexcept
+{
+    if (inputIndex < 0 || inputIndex >= numRoutableInputs)
+        return;
+
+    if (sourceIndex < -1 || sourceIndex >= sourceCount)
+        sourceIndex = -1;
+
+    if (sourceIndex >= 0)
+    {
+        for (int i = 0; i < numRoutableInputs; ++i)
+            if (i != inputIndex && inputSource[(size_t) i].load(std::memory_order_relaxed) == sourceIndex)
+                inputSource[(size_t) i].store(-1, std::memory_order_relaxed);
+    }
+
+    inputSource[(size_t) inputIndex].store(sourceIndex, std::memory_order_relaxed);
+}
+
+int ConsoleModel::getInputSource(int inputIndex) const noexcept
+{
+    if (inputIndex < 0 || inputIndex >= numRoutableInputs)
+        return -1;
+
+    return inputSource[(size_t) inputIndex].load(std::memory_order_relaxed);
+}
+
+int ConsoleModel::inputForSource(int sourceIndex) const noexcept
+{
+    if (sourceIndex < 0)
+        return -1;
+
+    for (int i = 0; i < numRoutableInputs; ++i)
+        if (inputSource[(size_t) i].load(std::memory_order_relaxed) == sourceIndex)
+            return i;
+
+    return -1;
+}
+
+int ConsoleModel::firstFreeInput() const noexcept
+{
+    for (int i = 0; i < numRoutableInputs; ++i)
+        if (inputSource[(size_t) i].load(std::memory_order_relaxed) < 0)
+            return i;
+
+    return -1;
+}
+
+juce::String ConsoleModel::inputName(int inputIndex)
+{
+    if (inputIndex >= 0 && inputIndex < numLocalInputs)
+        return "Local " + juce::String(inputIndex + 1);
+
+    if (inputIndex >= numLocalInputs && inputIndex < numRoutableInputs)
+        return "Aux " + juce::String(inputIndex - numLocalInputs + 1);
+
+    return "None";
 }
 
 juce::String ConsoleModel::getChannelName(int index) const

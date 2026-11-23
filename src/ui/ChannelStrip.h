@@ -40,26 +40,26 @@ public:
 
     void resized() override;
     void paint (juce::Graphics& g) override;
-    void setSourceNames (const juce::StringArray& names);
-    std::function<void()> onEdit;
+    void mouseDown (const juce::MouseEvent& event) override;
+    void setSelected (bool shouldSelect);
+    void refresh();
+    std::function<void()> onSelect;
 
 private:
+    void choose();
+
     ConsoleModel& model;
     MixEngine& engine;
     int index = 0;
+    bool selected = false;
 
-    juce::Label name;
-    juce::ComboBox sourceBox;
-    juce::Label trimLabel { {}, "Trim" };
-    juce::Slider trim;
-    juce::Label panLabel { {}, "Pan" };
+    juce::TextButton scribble;
     juce::Slider pan;
     MeterView meter;
     ConsoleFader fader;
     FaderScale scale;
     juce::TextButton mute { "M" };
     juce::TextButton solo { "S" };
-    juce::TextButton edit { "EQ" };
 };
 
 } // namespace vc

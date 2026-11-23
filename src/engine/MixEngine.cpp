@@ -316,7 +316,8 @@ void MixEngine::processChunk(float* left, float* right, int numSamples, juce::in
 
     for (int channel = 0; channel < numChannels; ++channel)
     {
-        const int source = model.channel(channel).source.load(std::memory_order_relaxed);
+        const int route = model.channel(channel).source.load(std::memory_order_relaxed);
+        const int source = model.getInputSource(route);
         const bool active = source >= 0 && source < maxSources && sources[(size_t) source].isActive();
         sourceOf[(size_t) channel] = active ? source : -1;
 

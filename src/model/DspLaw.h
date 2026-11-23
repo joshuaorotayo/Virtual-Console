@@ -30,6 +30,37 @@ inline float eqQ(float unit) noexcept
     return logRange(unit, 10.0f, 0.3f);
 }
 
+inline float unitFromLogRange(float value, float minimum, float maximum) noexcept
+{
+    const float safe = std::max(value, 1.0e-6f);
+    const float span = std::log(maximum / minimum);
+
+    if (std::abs(span) < 1.0e-6f)
+        return 0.0f;
+
+    return clamp01(std::log(safe / minimum) / span);
+}
+
+inline float eqFrequencyUnit(float hertz) noexcept
+{
+    return unitFromLogRange(hertz, 20.0f, 20000.0f);
+}
+
+inline float hpfFrequencyUnit(float hertz) noexcept
+{
+    return unitFromLogRange(hertz, 20.0f, 400.0f);
+}
+
+inline float eqGainUnit(float decibels) noexcept
+{
+    return clamp01((decibels + 15.0f) / 30.0f);
+}
+
+inline float eqQUnit(float q) noexcept
+{
+    return unitFromLogRange(q, 10.0f, 0.3f);
+}
+
 inline float hpfFrequencyHz(float unit) noexcept
 {
     return logRange(unit, 20.0f, 400.0f);

@@ -9,7 +9,7 @@ class VirtualConsoleApplication : public juce::JUCEApplication
 {
 public:
     const juce::String getApplicationName() override { return "Virtual Console"; }
-    const juce::String getApplicationVersion() override { return "0.1.0"; }
+    const juce::String getApplicationVersion() override { return JUCE_APPLICATION_VERSION_STRING; }
     bool moreThanOneInstanceAllowed() override { return true; }
 
     void initialise (const juce::String&) override
@@ -24,7 +24,7 @@ private:
     {
     public:
         MainWindow()
-            : DocumentWindow ("Virtual Console",
+            : DocumentWindow ("Virtual Console " + juce::String (JUCE_APPLICATION_VERSION_STRING),
                               juce::Colour (0xff14181d),
                               DocumentWindow::allButtons)
         {

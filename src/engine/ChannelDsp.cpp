@@ -2,6 +2,7 @@
 
 #include "engine/ChannelDsp.h"
 
+#include "dsp/FilterDesign.h"
 #include "model/DspLaw.h"
 #include "model/FaderLaw.h"
 
@@ -12,76 +13,34 @@ namespace vc
 {
 namespace
 {
-constexpr float pi = 3.14159265358979323846f;
-
 float loadUnit(const std::atomic<float>& value) noexcept
 {
     return value.load(std::memory_order_relaxed);
 }
 
+void applyCoeffs(ChannelDsp::Biquad& filter, const BiquadCoeffs& coeffs)
+{
+    filter.setNormalized(coeffs.b0, coeffs.b1, coeffs.b2, coeffs.a1, coeffs.a2);
+}
+
 void setHighPass(ChannelDsp::Biquad& filter, float frequency, double sampleRate)
 {
-    const float w0 = 2.0f * pi * frequency / (float) sampleRate;
-    const float cosine = std::cos(w0);
-    const float sine = std::sin(w0);
-    const float alpha = sine * 0.70710678118f;
-    const float a0 = 1.0f + alpha;
-    filter.setNormalized((1.0f + cosine) * 0.5f / a0,
-                         -(1.0f + cosine) / a0,
-                         (1.0f + cosine) * 0.5f / a0,
-                         -2.0f * cosine / a0,
-                         (1.0f - alpha) / a0);
+    applyCoeffs(filter, designHighPass(frequency, sampleRate));
 }
 
 void setLowPass(ChannelDsp::Biquad& filter, float frequency, double sampleRate)
 {
-    const float w0 = 2.0f * pi * frequency / (float) sampleRate;
-    const float cosine = std::cos(w0);
-    const float sine = std::sin(w0);
-    const float alpha = sine * 0.70710678118f;
-    const float a0 = 1.0f + alpha;
-    filter.setNormalized((1.0f - cosine) * 0.5f / a0,
-                         (1.0f - cosine) / a0,
-                         (1.0f - cosine) * 0.5f / a0,
-                         -2.0f * cosine / a0,
-                         (1.0f - alpha) / a0);
+    applyCoeffs(filter, designLowPass(frequency, sampleRate));
 }
 
 void setPeak(ChannelDsp::Biquad& filter, float frequency, float q, float gainDb, double sampleRate)
 {
-    const float amplitude = std::pow(10.0f, gainDb / 40.0f);
-    const float w0 = 2.0f * pi * frequency / (float) sampleRate;
-    const float cosine = std::cos(w0);
-    const float alpha = std::sin(w0) / (2.0f * std::max(q, 0.05f));
-    const float a0 = 1.0f + alpha / amplitude;
-    filter.setNormalized((1.0f + alpha * amplitude) / a0,
-                         (-2.0f * cosine) / a0,
-                         (1.0f - alpha * amplitude) / a0,
-                         (-2.0f * cosine) / a0,
-                         (1.0f - alpha / amplitude) / a0);
+    applyCoeffs(filter, designPeak(frequency, q, gainDb, sampleRate));
 }
 
 void setShelf(ChannelDsp::Biquad& filter, float frequency, float gainDb, bool high, double sampleRate)
 {
-    const float amplitude = std::pow(10.0f, gainDb / 40.0f);
-    const float w0 = 2.0f * pi * frequency / (float) sampleRate;
-    const float cosine = std::cos(w0);
-    const float sine = std::sin(w0);
-    const float alpha = sine * 0.5f * std::sqrt(2.0f);
-    const float twoRoot = 2.0f * std::sqrt(amplitude) * alpha;
-    const float a0 = high ? (amplitude + 1.0f) - (amplitude - 1.0f) * cosine + twoRoot
-                          : (amplitude + 1.0f) + (amplitude - 1.0f) * cosine + twoRoot;
-    const float b0 = high ? amplitude * ((amplitude + 1.0f) + (amplitude - 1.0f) * cosine + twoRoot)
-                          : amplitude * ((amplitude + 1.0f) - (amplitude - 1.0f) * cosine + twoRoot);
-    const float b1 = high ? -2.0f * amplitude * ((amplitude - 1.0f) + (amplitude + 1.0f) * cosine)
-                          : 2.0f * amplitude * ((amplitude - 1.0f) - (amplitude + 1.0f) * cosine);
-    const float b2 = high ? amplitude * ((amplitude + 1.0f) + (amplitude - 1.0f) * cosine - twoRoot)
-                          : amplitude * ((amplitude + 1.0f) - (amplitude - 1.0f) * cosine - twoRoot);
-    const float a1 = high ? 2.0f * ((amplitude - 1.0f) - (amplitude + 1.0f) * cosine)
-                          : -2.0f * ((amplitude - 1.0f) + (amplitude + 1.0f) * cosine);
-    const float a2 = high ? (amplitude + 1.0f) - (amplitude - 1.0f) * cosine - twoRoot
-                          : (amplitude + 1.0f) + (amplitude - 1.0f) * cosine - twoRoot;
-    filter.setNormalized(b0 / a0, b1 / a0, b2 / a0, a1 / a0, a2 / a0);
+    applyCoeffs(filter, designShelf(frequency, gainDb, high, sampleRate));
 }
 
 float readDelay(const std::vector<float>& line, int write, float samplesBack) noexcept

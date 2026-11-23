@@ -24,13 +24,6 @@ public:
 private:
     class SourceList;
 
-    enum class Page
-    {
-        mixer,
-        channel,
-        sources
-    };
-
     void timerCallback() override;
     void chooseAudio();
     void filesChosen();
@@ -39,8 +32,7 @@ private:
     void syncOutputSelection();
     void refreshSources();
     void showAudioSetup();
-    void showPage (Page next);
-    void editChannel (int channelIndex);
+    void selectChannel (int channelIndex);
     void removeSourceById (int sourceId);
     void syncTransport();
     juce::String statusText();
@@ -57,9 +49,7 @@ private:
     juce::AudioSourcePlayer player;
     juce::AudioDeviceManager deviceManager;
 
-    juce::Label title { {}, "Virtual Console" };
-    juce::TextButton mixerButton { "Mixer" };
-    juce::TextButton channelButton { "Channel" };
+    juce::Label title { {}, "Virtual Console 0.2.0" };
     juce::TextButton sourcesButton { "Sources" };
     juce::Label outputLabel { {}, "Output" };
     juce::ComboBox outputBox;
@@ -72,7 +62,7 @@ private:
     juce::Slider timeline;
     juce::Label timeLabel { {}, "0:00 / 0:00" };
     juce::Label sourceHeading { {}, "Sources" };
-    juce::Label emptySources { {}, "No sources yet. Add audio, then assign it from a channel. One file can feed several channels." };
+    juce::Label emptySources { {}, "No sources yet. Add a file and it lands on the first free local input or aux. Choose that input from Config." };
     std::unique_ptr<SourceList> sourceModel;
     juce::ListBox sourceList { "Sources", nullptr };
     std::unique_ptr<StripBank> strips;
@@ -87,8 +77,8 @@ private:
     std::unique_ptr<juce::FileChooser> chooser;
     std::vector<OutputChoice> outputs;
     bool applyingOutput = false;
-    Page page = Page::mixer;
-    int editingChannel = 0;
+    bool sourcesOpen = false;
+    int selectedChannel = 0;
     bool scrubbing = false;
     bool movingTimeline = false;
 

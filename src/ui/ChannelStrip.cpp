@@ -11,7 +11,6 @@ namespace
 juce::Colour background() { return juce::Colour (0xff14181d); }
 juce::Colour stripColour() { return juce::Colour (0xff2a313a); }
 juce::Colour text() { return juce::Colour (0xffe8edf2); }
-juce::Colour dim() { return juce::Colour (0xff98a2ad); }
 juce::Colour soloOn() { return juce::Colour (0xffe0a24a); }
 juce::Colour muteOn() { return juce::Colour (0xffd25b52); }
 
@@ -149,47 +148,12 @@ void FaderScale::paint (juce::Graphics& g)
 ChannelStrip::ChannelStrip (ConsoleModel& modelToUse, MixEngine& engineToUse, int channelIndex)
     : model (modelToUse), engine (engineToUse), index (channelIndex), scale (fader)
 {
-    name.setText (model.getChannelName (index), juce::dontSendNotification);
-    name.setJustificationType (juce::Justification::centred);
-    name.setEditable (false, true, false);
-    name.setColour (juce::Label::textColourId, text());
-    name.setFont (juce::Font (juce::FontOptions (13.0f)));
-    name.onTextChange = [this]
-    {
-        model.setChannelName (index, name.getText());
-        model.setString (channelLeaf (index, "config/name"), name.getText());
-    };
-    addAndMakeVisible (name);
-
-    sourceBox.setTextWhenNothingSelected ("None");
-    sourceBox.setScrollWheelEnabled (false);
-    sourceBox.onChange = [this]
-    {
-        const int id = sourceBox.getSelectedId();
-        model.setChannelSource (index, id <= 1 ? -1 : id - 2);
-    };
-    addAndMakeVisible (sourceBox);
-
-    trimLabel.setJustificationType (juce::Justification::centred);
-    trimLabel.setColour (juce::Label::textColourId, dim());
-    trimLabel.setFont (juce::Font (juce::FontOptions (11.0f)));
-    addAndMakeVisible (trimLabel);
-
-    styleRotary (trim);
-    trim.setValue (readFloat (model, channelLeaf (index, "preamp/trim"), 0.5f), juce::dontSendNotification);
-    trim.onValueChange = [this]
-    {
-        const float value = (float) trim.getValue();
-        model.setFloat (channelLeaf (index, "preamp/trim"), value);
-        trim.setTooltip (decibelText (trimToDb (value)) + " dB");
-    };
-    trim.setTooltip ("0.0 dB");
-    addAndMakeVisible (trim);
-
-    panLabel.setJustificationType (juce::Justification::centred);
-    panLabel.setColour (juce::Label::textColourId, dim());
-    panLabel.setFont (juce::Font (juce::FontOptions (11.0f)));
-    addAndMakeVisible (panLabel);
+    scribble.setColour (juce::TextButton::buttonColourId, juce::Colour (0xff232830));
+    scribble.setColour (juce::TextButton::textColourOffId, text());
+    scribble.setTooltip ("Select channel");
+    scribble.onClick = [this] { choose(); };
+    addAndMakeVisible (scribble);
+    refresh();
 
     styleRotary (pan);
     pan.setValue (readFloat (model, channelLeaf (index, "mix/pan"), 0.5f), juce::dontSendNotification);
@@ -207,13 +171,14 @@ ChannelStrip::ChannelStrip (ConsoleModel& modelToUse, MixEngine& engineToUse, in
         pan.setTooltip (label);
     };
     pan.setTooltip ("C");
+    pan.onDragStart = [this] { choose(); };
     addAndMakeVisible (pan);
 
     meter.readLevel = [this] { return engine.getChannelMeter (index); };
     addAndMakeVisible (meter);
 
     fader.setSliderStyle (juce::Slider::LinearVertical);
-    fader.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 52, 16);
+    fader.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 46, 16);
     fader.setRange (0.0, 1.0, 0.0);
     fader.setScrollWheelEnabled (false);
     fader.setDoubleClickReturnValue (true, 0.75);
@@ -228,6 +193,7 @@ ChannelStrip::ChannelStrip (ConsoleModel& modelToUse, MixEngine& engineToUse, in
     };
     fader.setValue (readFloat (model, channelLeaf (index, "mix/fader"), 0.75f), juce::dontSendNotification);
     fader.onValueChange = [this] { model.setFloat (channelLeaf (index, "mix/fader"), (float) fader.getValue()); };
+    fader.onDragStart = [this] { choose(); };
     addAndMakeVisible (fader);
     addAndMakeVisible (scale);
 
@@ -237,7 +203,11 @@ ChannelStrip::ChannelStrip (ConsoleModel& modelToUse, MixEngine& engineToUse, in
     int enabled = 1;
     model.getInt (channelLeaf (index, "mix/on"), enabled);
     mute.setToggleState (enabled == 0, juce::dontSendNotification);
-    mute.onClick = [this] { model.setInt (channelLeaf (index, "mix/on"), mute.getToggleState() ? 0 : 1); };
+    mute.onClick = [this]
+    {
+        choose();
+        model.setInt (channelLeaf (index, "mix/on"), mute.getToggleState() ? 0 : 1);
+    };
     addAndMakeVisible (mute);
 
     solo.setClickingTogglesState (true);
@@ -246,58 +216,74 @@ ChannelStrip::ChannelStrip (ConsoleModel& modelToUse, MixEngine& engineToUse, in
     int soloed = 0;
     model.getInt (soloPath (index), soloed);
     solo.setToggleState (soloed != 0, juce::dontSendNotification);
-    solo.onClick = [this] { model.setInt (soloPath (index), solo.getToggleState() ? 1 : 0); };
-    addAndMakeVisible (solo);
-
-    edit.setTooltip ("Channel processing");
-    edit.onClick = [this]
+    solo.onClick = [this]
     {
-        if (onEdit != nullptr)
-            onEdit();
+        choose();
+        model.setInt (soloPath (index), solo.getToggleState() ? 1 : 0);
     };
-    addAndMakeVisible (edit);
+    addAndMakeVisible (solo);
 }
 
-void ChannelStrip::setSourceNames (const juce::StringArray& names)
+void ChannelStrip::choose()
 {
-    const int selected = model.getChannelSource (index);
-    sourceBox.clear (juce::dontSendNotification);
-    sourceBox.addItem ("None", 1);
+    if (onSelect != nullptr)
+        onSelect();
+}
 
-    for (int i = 0; i < names.size(); ++i)
-        sourceBox.addItem (names[i], i + 2);
+void ChannelStrip::setSelected (bool shouldSelect)
+{
+    if (selected == shouldSelect)
+        return;
 
-    sourceBox.setSelectedId (selected < 0 ? 1 : selected + 2, juce::dontSendNotification);
+    selected = shouldSelect;
+    repaint();
+}
+
+void ChannelStrip::refresh()
+{
+    const auto channelName = model.getChannelName (index);
+
+    if (scribble.getButtonText() != channelName)
+        scribble.setButtonText (channelName);
+}
+
+void ChannelStrip::mouseDown (const juce::MouseEvent& event)
+{
+    if (event.originalComponent == this)
+        choose();
 }
 
 void ChannelStrip::paint (juce::Graphics& g)
 {
     g.fillAll (background());
-    g.setColour (stripColour());
-    g.fillRoundedRectangle (getLocalBounds().reduced (3).toFloat(), 6.0f);
-    g.setColour (juce::Colour::fromHSV (std::fmod (index * 0.17f, 1.0f), 0.45f, 0.75f, 1.0f));
-    g.fillRoundedRectangle (8.0f, 8.0f, (float) getWidth() - 16.0f, 4.0f, 2.0f);
+    auto bounds = getLocalBounds().reduced (3).toFloat();
+    g.setColour (selected ? juce::Colour (0xff35414c) : stripColour());
+    g.fillRoundedRectangle (bounds, 6.0f);
+    const auto colour = juce::Colour::fromHSV (std::fmod (index * 0.17f, 1.0f), 0.55f, selected ? 0.9f : 0.7f, 1.0f);
+    g.setColour (colour);
+    g.fillRoundedRectangle (8.0f, 8.0f, (float) getWidth() - 16.0f, selected ? 6.0f : 4.0f, 2.0f);
+
+    if (selected)
+    {
+        g.setColour (colour);
+        g.drawRoundedRectangle (bounds, 6.0f, 2.0f);
+    }
 }
 
 void ChannelStrip::resized()
 {
-    auto area = getLocalBounds().reduced (6);
-    area.removeFromTop (10);
-    name.setBounds (area.removeFromTop (22));
-    sourceBox.setBounds (area.removeFromTop (24).reduced (0, 2));
-    edit.setBounds (area.removeFromTop (22).reduced (18, 1));
-    trimLabel.setBounds (area.removeFromTop (14));
-    trim.setBounds (area.removeFromTop (46));
-    panLabel.setBounds (area.removeFromTop (14));
-    pan.setBounds (area.removeFromTop (46));
+    auto area = getLocalBounds().reduced (5);
+    area.removeFromTop (12);
+    scribble.setBounds (area.removeFromTop (28).reduced (2, 0));
+    pan.setBounds (area.removeFromTop (46).withSizeKeepingCentre (44, 44));
 
-    auto buttons = area.removeFromBottom (28);
-    mute.setBounds (buttons.removeFromLeft (buttons.getWidth() / 2).reduced (2));
-    solo.setBounds (buttons.reduced (2));
+    auto buttons = area.removeFromBottom (26);
+    mute.setBounds (buttons.removeFromLeft (buttons.getWidth() / 2).reduced (2, 0));
+    solo.setBounds (buttons.reduced (2, 0));
 
     area.removeFromBottom (2);
-    scale.setBounds (area.removeFromLeft (42));
-    meter.setBounds (area.removeFromRight (12).reduced (0, 4));
+    scale.setBounds (area.removeFromLeft (36));
+    meter.setBounds (area.removeFromRight (10).reduced (0, 4));
     fader.setBounds (area.reduced (1, 0));
 }
 
