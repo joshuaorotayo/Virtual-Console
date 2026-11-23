@@ -78,6 +78,169 @@ private:
     std::array<std::unique_ptr<ChannelStrip>, numChannels> strips;
 };
 
+class BusStrip : public juce::Component
+{
+public:
+    BusStrip (ConsoleModel& modelToUse, int busIndex)
+        : model (modelToUse), index (busIndex), scale (fader)
+    {
+        scribble.setButtonText ("Bus " + juce::String (index + 1));
+        scribble.setColour (juce::TextButton::buttonColourId, juce::Colour (0xff232830));
+        scribble.setColour (juce::TextButton::textColourOffId, text());
+        scribble.setInterceptsMouseClicks (false, false);
+        addAndMakeVisible (scribble);
+
+        pan.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
+        pan.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
+        pan.setRange (0.0, 1.0, 0.0);
+        pan.setScrollWheelEnabled (false);
+        pan.setDoubleClickReturnValue (true, 0.5);
+        pan.onValueChange = [this] { model.setFloat (leaf ("mix/pan"), (float) pan.getValue()); };
+        pan.setTooltip ("Balance to main");
+        addAndMakeVisible (pan);
+
+        fader.setSliderStyle (juce::Slider::LinearVertical);
+        fader.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 46, 16);
+        fader.setRange (0.0, 1.0, 0.0);
+        fader.setScrollWheelEnabled (false);
+        fader.setDoubleClickReturnValue (true, 0.75);
+        fader.textFromValueFunction = [] (double value) { return decibelText (faderToDb ((float) value)); };
+        fader.valueFromTextFunction = [] (const juce::String& text)
+        {
+            if (text.containsIgnoreCase ("inf"))
+                return 0.0;
+
+            return (double) dbToFader (text.getFloatValue());
+        };
+        fader.onValueChange = [this] { model.setFloat (leaf ("mix/fader"), (float) fader.getValue()); };
+        addAndMakeVisible (fader);
+        addAndMakeVisible (scale);
+
+        mute.setClickingTogglesState (true);
+        mute.setColour (juce::TextButton::buttonOnColourId, muteOn());
+        mute.setTooltip ("Mute bus");
+        mute.onClick = [this] { model.setInt (leaf ("mix/on"), mute.getToggleState() ? 0 : 1); };
+        addAndMakeVisible (mute);
+
+        toMain.setClickingTogglesState (true);
+        toMain.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xff3d6f8f));
+        toMain.setTooltip ("Send this bus to the main mix");
+        toMain.onClick = [this] { model.setInt (leaf ("mix/st"), toMain.getToggleState() ? 1 : 0); };
+        addAndMakeVisible (toMain);
+        refresh();
+    }
+
+    void refresh()
+    {
+        if (! pan.isMouseButtonDown())
+            pan.setValue (read ("mix/pan", 0.5f), juce::dontSendNotification);
+
+        if (! fader.isMouseButtonDown() && ! faderHasFocus())
+            fader.setValue (read ("mix/fader", 0.75f), juce::dontSendNotification);
+
+        if (! mute.isMouseButtonDown())
+        {
+            int enabled = 1;
+            model.getInt (leaf ("mix/on"), enabled);
+            mute.setToggleState (enabled == 0, juce::dontSendNotification);
+        }
+
+        if (! toMain.isMouseButtonDown())
+        {
+            int assigned = 0;
+            model.getInt (leaf ("mix/st"), assigned);
+            toMain.setToggleState (assigned != 0, juce::dontSendNotification);
+        }
+    }
+
+    void paint (juce::Graphics& g) override
+    {
+        g.fillAll (background());
+        auto bounds = getLocalBounds().reduced (3).toFloat();
+        g.setColour (juce::Colour (0xff2a313a));
+        g.fillRoundedRectangle (bounds, 6.0f);
+        g.setColour (juce::Colour (0xff7eb6d6));
+        g.fillRoundedRectangle (8.0f, 8.0f, (float) getWidth() - 16.0f, 4.0f, 2.0f);
+    }
+
+    void resized() override
+    {
+        auto area = getLocalBounds().reduced (5);
+        area.removeFromTop (12);
+        scribble.setBounds (area.removeFromTop (28).reduced (2, 0));
+        pan.setBounds (area.removeFromTop (46).withSizeKeepingCentre (44, 44));
+        auto buttons = area.removeFromBottom (26);
+        mute.setBounds (buttons.removeFromLeft (buttons.getWidth() / 2).reduced (2, 0));
+        toMain.setBounds (buttons.reduced (2, 0));
+        area.removeFromBottom (2);
+        scale.setBounds (area.removeFromLeft (36));
+        fader.setBounds (area.reduced (1, 0));
+    }
+
+private:
+    juce::String leaf (const char* name) const
+    {
+        return "/bus/" + juce::String (index + 1).paddedLeft ('0', 2) + "/" + name;
+    }
+
+    float read (const char* name, float fallback) const
+    {
+        float value = fallback;
+        model.getFloat (leaf (name), value);
+        return value;
+    }
+
+    bool faderHasFocus() const
+    {
+        for (auto* child : fader.getChildren())
+            if (child->hasKeyboardFocus (true))
+                return true;
+
+        return false;
+    }
+
+    ConsoleModel& model;
+    int index = 0;
+    juce::TextButton scribble;
+    juce::Slider pan;
+    ConsoleFader fader;
+    FaderScale scale;
+    juce::TextButton mute { "M" };
+    juce::TextButton toMain { "Main" };
+};
+
+class BusBank : public juce::Component
+{
+public:
+    static constexpr int stripWidth = 112;
+
+    explicit BusBank (ConsoleModel& model)
+    {
+        for (int i = 0; i < numBuses; ++i)
+        {
+            strips[(size_t) i] = std::make_unique<BusStrip> (model, i);
+            addAndMakeVisible (*strips[(size_t) i]);
+        }
+    }
+
+    void refresh()
+    {
+        for (auto& strip : strips)
+            strip->refresh();
+    }
+
+    void resized() override
+    {
+        for (int i = 0; i < numBuses; ++i)
+            strips[(size_t) i]->setBounds (i * stripWidth, 0, stripWidth, getHeight());
+    }
+
+    int widthForBuses() const { return stripWidth * numBuses; }
+
+private:
+    std::array<std::unique_ptr<BusStrip>, numBuses> strips;
+};
+
 class SourceRow : public juce::Component
 {
 public:
@@ -244,8 +407,18 @@ MainComponent::MainComponent()
         sourcesOpen = sourcesButton.getToggleState();
         resized();
     };
-    sourcesButton.setTooltip ("Show the source list above the faders");
     addAndMakeVisible (sourcesButton);
+    sourcesButton.setTooltip ("Show the source list above the faders");
+
+    busesButton.setClickingTogglesState (true);
+    busesButton.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xff3d6f8f));
+    busesButton.setTooltip ("Show the 16 buses on the fader bank");
+    busesButton.onClick = [this]
+    {
+        busesOpen = busesButton.getToggleState();
+        resized();
+    };
+    addAndMakeVisible (busesButton);
 
     for (auto* label : { &outputLabel, &listenLabel, &mainLabel })
     {
@@ -350,6 +523,7 @@ MainComponent::MainComponent()
 
     strips = std::make_unique<StripBank> (model, engine);
     strips->setSelectHandler ([this] (int channel) { selectChannel (channel); });
+    buses = std::make_unique<BusBank> (model);
     viewport.setViewedComponent (strips.get(), false);
     viewport.setScrollBarsShown (false, true);
     addAndMakeVisible (viewport);
@@ -429,6 +603,8 @@ void MainComponent::resized()
     title.setBounds (top.removeFromLeft (210));
     top.removeFromLeft (8);
     sourcesButton.setBounds (top.removeFromLeft (96));
+    top.removeFromLeft (6);
+    busesButton.setBounds (top.removeFromLeft (80));
     addButton.setBounds (top.removeFromRight (110).reduced (4, 0));
     listenBox.setBounds (top.removeFromRight (110).reduced (4, 0));
     listenLabel.setBounds (top.removeFromRight (48));
@@ -472,7 +648,12 @@ void MainComponent::resized()
     status.setBounds (area.removeFromBottom (18).reduced (10, 0));
     viewport.setBounds (area.reduced (4, 4));
     const int stripHeight = std::max (0, viewport.getHeight() - viewport.getScrollBarThickness());
-    strips->setSize (strips->widthForChannels(), stripHeight);
+    auto* bank = busesOpen ? static_cast<juce::Component*> (buses.get()) : static_cast<juce::Component*> (strips.get());
+
+    if (viewport.getViewedComponent() != bank)
+        viewport.setViewedComponent (bank, false);
+
+    bank->setSize (busesOpen ? buses->widthForBuses() : strips->widthForChannels(), stripHeight);
 }
 
 void MainComponent::selectChannel (int channelIndex)
@@ -518,6 +699,7 @@ void MainComponent::timerCallback()
 
     syncTransport();
     strips->refresh();
+    buses->refresh();
     channelEditor->refresh();
 }
 

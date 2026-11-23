@@ -612,7 +612,8 @@ public:
     {
         channel,
         eq,
-        dyn
+        dyn,
+        sends
     };
 
     Surface(ChannelEditor& ownerToUse, ConsoleModel& modelToUse)
@@ -699,8 +700,9 @@ public:
         homeTab.onClick = [this] { show(Page::channel); };
         eqTab.onClick = [this] { show(Page::eq); };
         dynTab.onClick = [this] { show(Page::dyn); };
+        sendsTab.onClick = [this] { show(Page::sends); };
 
-        for (auto* tab : { &homeTab, &eqTab, &dynTab })
+        for (auto* tab : { &homeTab, &eqTab, &dynTab, &sendsTab })
             addAndMakeVisible(*tab);
 
         trim = addSlider("Trim", "preamp/trim", [](float value) { return decibelText(trimToDb(value)); });
@@ -775,6 +777,14 @@ public:
 
         for (int band = 0; band < numChannelEqBands; ++band)
             addBox(bandBox[band], "Band " + juce::String(band + 1), eqBandColour(band));
+
+        for (int bus = 0; bus < numBuses; ++bus)
+        {
+            const auto number = juce::String(bus + 1).paddedLeft('0', 2);
+            sendLevel[bus] = addSlider("Level", "mix/" + number + "/level", [](float value) { return decibelText(faderToDb(value)); });
+            sendPre[bus] = addFlag("Pre", "mix/" + number + "/tap");
+            addBox(sendBox[bus], "Bus " + juce::String(bus + 1), juce::Colour(0xff7eb6d6));
+        }
 
         addAndMakeVisible(eqGraph);
         show(Page::channel);
@@ -869,7 +879,7 @@ public:
         linkButton.setBounds(head.removeFromRight(72));
 
         auto tabs = area.removeFromTop(36).reduced(8, 4);
-        for (auto* tab : { &homeTab, &eqTab, &dynTab })
+        for (auto* tab : { &homeTab, &eqTab, &dynTab, &sendsTab })
         {
             tab->setBounds(tabs.removeFromLeft(92));
             tabs.removeFromLeft(6);
@@ -967,6 +977,25 @@ public:
             takeKnob(row, compRelease);
             takeKnob(row, compMakeup);
         }
+        else if (page == Page::sends)
+        {
+            const int columns = 8;
+            const int rows = 2;
+            const int cellW = body.getWidth() / columns;
+            const int cellH = juce::jmax(96, body.getHeight() / rows);
+
+            for (int bus = 0; bus < numBuses; ++bus)
+            {
+                const int column = bus % columns;
+                const int row = bus / columns;
+                auto cell = juce::Rectangle<int>(body.getX() + column * cellW, body.getY() + row * cellH, cellW, cellH).reduced(3);
+                sendBox[bus].setBounds(cell);
+                cell = cell.reduced(6, 4);
+                cell.removeFromTop(16);
+                sendPre[bus]->setBounds(cell.removeFromRight(52).removeFromTop(26));
+                sendLevel[bus]->setBounds(cell);
+            }
+        }
     }
 
 private:
@@ -986,6 +1015,7 @@ private:
         const bool channel = page == Page::channel;
         const bool equaliser = page == Page::eq;
         const bool dyn = page == Page::dyn;
+        const bool sends = page == Page::sends;
 
         trim->setVisible(channel);
         polarity->setVisible(channel);
@@ -1026,6 +1056,13 @@ private:
             eq[band].q->setVisible(equaliser);
         }
 
+        for (int bus = 0; bus < numBuses; ++bus)
+        {
+            sendBox[bus].setVisible(sends);
+            sendLevel[bus]->setVisible(sends);
+            sendPre[bus]->setVisible(sends);
+        }
+
         styleTabs();
         resized();
     }
@@ -1041,6 +1078,7 @@ private:
         style(homeTab, page == Page::channel, gateOn != nullptr && gateOn->isOn());
         style(eqTab, page == Page::eq, hpfOn != nullptr && hpfOn->isOn());
         style(dynTab, page == Page::dyn, compOn != nullptr && compOn->isOn());
+        style(sendsTab, page == Page::sends, false);
     }
 
     struct EqBand
@@ -1069,6 +1107,7 @@ private:
     juce::TextButton homeTab { "Channel" };
     juce::TextButton eqTab { "EQ" };
     juce::TextButton dynTab { "Dyn" };
+    juce::TextButton sendsTab { "Sends" };
 
     UnitSlider* trim = nullptr;
     FlagButton* polarity = nullptr;
@@ -1099,6 +1138,9 @@ private:
     ControlBox gateBox;
     ControlBox hpfBox;
     ControlBox bandBox[numChannelEqBands];
+    ControlBox sendBox[numBuses];
+    UnitSlider* sendLevel[numBuses] {};
+    FlagButton* sendPre[numBuses] {};
     EqGraph eqGraph;
     std::vector<std::unique_ptr<UnitSlider>> sliders;
     std::vector<std::unique_ptr<FlagButton>> flags;

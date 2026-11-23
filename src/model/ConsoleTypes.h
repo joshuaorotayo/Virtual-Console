@@ -63,6 +63,11 @@ struct MixPoint
     Dynamics comp {};
 };
 
+struct Bus : MixPoint
+{
+    std::atomic<int> toMain { 0 };
+};
+
 struct Channel : MixPoint
 {
     std::atomic<int> solo { 0 };
@@ -75,8 +80,8 @@ struct Channel : MixPoint
     std::atomic<int> delayOn { 0 };
     std::atomic<float> delayTime { 0.0f };
     Dynamics gate {};
-    float sendLevel[numBuses] {};
-    int sendPre[numBuses] {};
+    std::atomic<float> sendLevel[numBuses] {};
+    std::atomic<int> sendPre[numBuses] {};
     int dcaMask = 0;
     int muteMask = 0;
     int color = 0;

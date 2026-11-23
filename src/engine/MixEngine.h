@@ -13,7 +13,7 @@
 namespace vc
 {
 
-// Real-time mix of the console's channel strips into main and solo.
+// Real-time mix of the console's channel strips, buses, and solo.
 // Targets are captured at the start of each block, then smoothed per sample.
 class MixEngine : public juce::AudioSource
 {
@@ -66,6 +66,9 @@ private:
     std::array<ChannelDsp, numChannels> channelDsp;
     std::vector<float> processed;
     std::array<StripSmooth, numChannels> smooth {};
+    std::array<std::array<float, numBuses>, numChannels> sendSmooth {};
+    std::array<float, numBuses> busSmoothL {};
+    std::array<float, numBuses> busSmoothR {};
     std::array<std::atomic<float>, numChannels> channelMeters {};
     std::atomic<float> mainMeter { 0.0f };
     std::atomic<bool> playing { false };

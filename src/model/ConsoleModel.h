@@ -36,6 +36,8 @@ public:
 
     MixPoint& mainStereo() noexcept { return mainSt; }
     const MixPoint& mainStereo() const noexcept { return mainSt; }
+    Bus& bus(int index) noexcept { return buses[(size_t) index]; }
+    const Bus& bus(int index) const noexcept { return buses[(size_t) index]; }
 
     void setListenMode(ListenMode mode) noexcept;
     ListenMode getListenMode() const noexcept;
@@ -70,7 +72,7 @@ public:
 
 private:
     std::array<Channel, numChannels> channels;
-    std::array<MixPoint, numBuses> buses;
+    std::array<Bus, numBuses> buses;
     std::array<MixPoint, numMatrices> matrices;
     std::array<MixPoint, numFxReturns> fxReturns;
     std::array<MixPoint, numAuxIns> auxIns;

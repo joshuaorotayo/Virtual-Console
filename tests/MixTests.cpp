@@ -114,6 +114,18 @@ public:
             expect (! model.setString ("/config/aes50/A/box", "not-a-box"));
             expect (model.getString ("/config/aes50/A/box", boxName));
             expectEquals (boxName, juce::String ("DL32"));
+            expect (model.setFloat ("/ch/01/mix/01/level", 0.4f));
+            expect (model.setInt ("/ch/01/mix/01/tap", 1));
+            expect (model.setInt ("/bus/01/mix/st", 1));
+            float send = 0.0f;
+            int tap = 0;
+            int toMain = 0;
+            expect (model.getFloat ("/ch/01/mix/01/level", send));
+            expect (model.getInt ("/ch/01/mix/01/tap", tap));
+            expect (model.getInt ("/bus/01/mix/st", toMain));
+            expectWithinAbsoluteError (send, 0.4f, 1.0e-5f);
+            expectEquals (tap, 1);
+            expectEquals (toMain, 1);
             expectEquals (model.addSource ("vocal", "C:/audio/vocal.wav"), 0);
             expect (model.addSource ("again", "C:/audio/vocal.wav") < 0);
             expectEquals (model.addSource ("room", "C:/audio/room.wav"), 1);
@@ -336,6 +348,35 @@ public:
             }
 
             file.deleteFile();
+        }
+
+        beginTest ("a bus send reaches the main mix");
+        {
+            ConsoleModel model;
+            MixEngine engine (model);
+            engine.prepareToPlay (32, 48000.0);
+            const int source = engine.adoptMemorySource (std::vector<float> (256, 1.0f), 48000.0, "bus");
+            routeSource (model, source, 0, { 0 });
+            expect (model.setFloat ("/ch/01/mix/pan", 0.0f));
+            expect (model.setInt ("/ch/01/mix/st", 0));
+            expect (model.setFloat ("/ch/01/mix/01/level", 0.75f));
+            expect (model.setInt ("/bus/01/mix/st", 1));
+            engine.play();
+            engine.snapSmoothers();
+            auto block = renderBlock (engine, 32);
+            expectWithinAbsoluteError (block.left[8], 1.0f, 0.02f);
+            expectWithinAbsoluteError (block.right[8], 0.0f, 0.02f);
+
+            expect (model.setFloat ("/ch/01/mix/fader", 0.0f));
+            engine.snapSmoothers();
+            block = renderBlock (engine, 32);
+            expectWithinAbsoluteError (block.left[8], 0.0f, 0.02f);
+
+            expect (model.setInt ("/ch/01/mix/01/tap", 1));
+            engine.snapSmoothers();
+            block = renderBlock (engine, 32);
+            expectWithinAbsoluteError (block.left[8], 1.0f, 0.02f);
+            expectWithinAbsoluteError (block.right[8], 0.0f, 0.02f);
         }
     }
 };

@@ -289,6 +289,23 @@ void MixEngine::snapSmoothers() noexcept
         state.curR = outR;
         state.curPflL = pflL;
         state.curPflR = pflR;
+
+        const auto& strip = model.channel(channel);
+
+        for (int bus = 0; bus < numBuses; ++bus)
+            sendSmooth[(size_t) channel][(size_t) bus] = faderToGain(strip.sendLevel[bus].load(std::memory_order_relaxed));
+    }
+
+    for (int bus = 0; bus < numBuses; ++bus)
+    {
+        const auto& strip = model.bus(bus);
+        const float pan = strip.pan.load(std::memory_order_relaxed);
+        const float balanceL = pan <= 0.5f ? 1.0f : std::clamp((1.0f - pan) * 2.0f, 0.0f, 1.0f);
+        const float balanceR = pan >= 0.5f ? 1.0f : std::clamp(pan * 2.0f, 0.0f, 1.0f);
+        const float gain = faderToGain(strip.fader.load(std::memory_order_relaxed))
+                         * (strip.on.load(std::memory_order_relaxed) != 0 ? 1.0f : 0.0f);
+        busSmoothL[(size_t) bus] = balanceL * gain;
+        busSmoothR[(size_t) bus] = balanceR * gain;
     }
 
     const float mainFader = faderToGain(model.mainStereo().fader.load(std::memory_order_relaxed));
@@ -385,15 +402,42 @@ void MixEngine::processChunk(float* left, float* right, int numSamples, juce::in
     std::array<float, numChannels> targetPflR {};
     std::array<char, numChannels> soloed {};
     std::array<char, numChannels> toMain {};
+    std::array<char, numChannels> audible {};
+    std::array<std::array<float, numBuses>, numChannels> sendTarget {};
+    std::array<std::array<char, numBuses>, numChannels> sendIsPre {};
+    std::array<float, numBuses> busTargetL {};
+    std::array<float, numBuses> busTargetR {};
+    std::array<char, numBuses> busToMain {};
     bool anySolo = false;
 
     for (int channel = 0; channel < numChannels; ++channel)
     {
+        const auto& strip = model.channel(channel);
         channelTargets(channel, targetPflL[(size_t) channel], targetPflR[(size_t) channel],
                        targetL[(size_t) channel], targetR[(size_t) channel]);
-        soloed[(size_t) channel] = model.channel(channel).solo.load(std::memory_order_relaxed) != 0 ? 1 : 0;
-        toMain[(size_t) channel] = model.channel(channel).mainAssign.load(std::memory_order_relaxed) != 0 ? 1 : 0;
+        soloed[(size_t) channel] = strip.solo.load(std::memory_order_relaxed) != 0 ? 1 : 0;
+        toMain[(size_t) channel] = strip.mainAssign.load(std::memory_order_relaxed) != 0 ? 1 : 0;
+        audible[(size_t) channel] = strip.on.load(std::memory_order_relaxed) != 0 ? 1 : 0;
         anySolo = anySolo || soloed[(size_t) channel] != 0;
+
+        for (int bus = 0; bus < numBuses; ++bus)
+        {
+            sendTarget[(size_t) channel][(size_t) bus] = faderToGain(strip.sendLevel[bus].load(std::memory_order_relaxed));
+            sendIsPre[(size_t) channel][(size_t) bus] = strip.sendPre[bus].load(std::memory_order_relaxed) != 0 ? 1 : 0;
+        }
+    }
+
+    for (int bus = 0; bus < numBuses; ++bus)
+    {
+        const auto& strip = model.bus(bus);
+        const float pan = strip.pan.load(std::memory_order_relaxed);
+        const float balanceL = pan <= 0.5f ? 1.0f : std::clamp((1.0f - pan) * 2.0f, 0.0f, 1.0f);
+        const float balanceR = pan >= 0.5f ? 1.0f : std::clamp(pan * 2.0f, 0.0f, 1.0f);
+        const float gain = faderToGain(strip.fader.load(std::memory_order_relaxed))
+                         * (strip.on.load(std::memory_order_relaxed) != 0 ? 1.0f : 0.0f);
+        busTargetL[(size_t) bus] = balanceL * gain;
+        busTargetR[(size_t) bus] = balanceR * gain;
+        busToMain[(size_t) bus] = strip.toMain.load(std::memory_order_relaxed) != 0 ? 1 : 0;
     }
 
     const auto listen = model.getListenMode();
@@ -406,6 +450,9 @@ void MixEngine::processChunk(float* left, float* right, int numSamples, juce::in
 
     for (int sample = 0; sample < numSamples; ++sample)
     {
+        std::array<float, numBuses> busSumL {};
+        std::array<float, numBuses> busSumR {};
+
         for (int channel = 0; channel < numChannels; ++channel)
         {
             auto& state = smooth[(size_t) channel];
@@ -435,6 +482,40 @@ void MixEngine::processChunk(float* left, float* right, int numSamples, juce::in
                 soloBufL[(size_t) sample] += input * state.curPflL;
                 soloBufR[(size_t) sample] += input * state.curPflR;
             }
+
+            for (int bus = 0; bus < numBuses; ++bus)
+            {
+                auto& gain = sendSmooth[(size_t) channel][(size_t) bus];
+                const float target = sendTarget[(size_t) channel][(size_t) bus];
+                gain += (target - gain) * smoothCoeff;
+
+                if (gain <= 1.0e-6f)
+                    continue;
+
+                if (sendIsPre[(size_t) channel][(size_t) bus] != 0)
+                {
+                    const float mute = audible[(size_t) channel] != 0 ? 1.0f : 0.0f;
+                    busSumL[(size_t) bus] += input * state.curPflL * mute * gain;
+                    busSumR[(size_t) bus] += input * state.curPflR * mute * gain;
+                }
+                else
+                {
+                    busSumL[(size_t) bus] += leftSample * gain;
+                    busSumR[(size_t) bus] += rightSample * gain;
+                }
+            }
+        }
+
+        for (int bus = 0; bus < numBuses; ++bus)
+        {
+            busSmoothL[(size_t) bus] += (busTargetL[(size_t) bus] - busSmoothL[(size_t) bus]) * smoothCoeff;
+            busSmoothR[(size_t) bus] += (busTargetR[(size_t) bus] - busSmoothR[(size_t) bus]) * smoothCoeff;
+
+            if (busToMain[(size_t) bus] == 0)
+                continue;
+
+            mainBufL[(size_t) sample] += busSumL[(size_t) bus] * busSmoothL[(size_t) bus];
+            mainBufR[(size_t) sample] += busSumR[(size_t) bus] * busSmoothR[(size_t) bus];
         }
 
         mainGain += (mainTarget - mainGain) * smoothCoeff;

@@ -619,7 +619,7 @@ bool ConsoleModel::assignFloat(const juce::String& path, float value)
             if (bus < 0)
                 return false;
 
-            strip.sendLevel[bus] = clampUnit(value);
+            strip.sendLevel[bus].store(clampUnit(value), std::memory_order_relaxed);
             return true;
         }
 
@@ -730,7 +730,7 @@ bool ConsoleModel::getFloat(const juce::String& path, float& value) const
             if (bus < 0)
                 return false;
 
-            value = strip.sendLevel[bus];
+            value = strip.sendLevel[bus].load(std::memory_order_relaxed);
             return true;
         }
 
@@ -913,6 +913,17 @@ bool ConsoleModel::assignInt(const juce::String& path, int value)
             return true;
         }
 
+        if (tokens.size() >= 5 && tokens[2] == "mix" && tokens[3].containsOnly("0123456789") && tokens[4] == "tap")
+        {
+            const int bus = indexOf(tokens[3], numBuses);
+
+            if (bus < 0)
+                return false;
+
+            strip.sendPre[bus].store(value != 0 ? 1 : 0, std::memory_order_relaxed);
+            return true;
+        }
+
         if (setMixOn(strip, tokens, 2, value))
             return true;
 
@@ -922,7 +933,17 @@ bool ConsoleModel::assignInt(const juce::String& path, int value)
     if (tokens[0] == "bus")
     {
         const int index = indexOf(tokens[1], numBuses);
-        return index >= 0 && setMixOn(buses[(size_t) index], tokens, 2, value);
+
+        if (index < 0)
+            return false;
+
+        if (tokens.size() >= 4 && tokens[2] == "mix" && tokens[3] == "st")
+        {
+            buses[(size_t) index].toMain.store(value != 0 ? 1 : 0, std::memory_order_relaxed);
+            return true;
+        }
+
+        return setMixOn(buses[(size_t) index], tokens, 2, value);
     }
 
     if (tokens[0] == "mtx")
@@ -1094,6 +1115,17 @@ bool ConsoleModel::getInt(const juce::String& path, int& value) const
             return true;
         }
 
+        if (tokens.size() >= 5 && tokens[2] == "mix" && tokens[3].containsOnly("0123456789") && tokens[4] == "tap")
+        {
+            const int bus = indexOf(tokens[3], numBuses);
+
+            if (bus < 0)
+                return false;
+
+            value = strip.sendPre[bus].load(std::memory_order_relaxed);
+            return true;
+        }
+
         if (getMixOn(strip, tokens, 2, value))
             return true;
 
@@ -1103,7 +1135,17 @@ bool ConsoleModel::getInt(const juce::String& path, int& value) const
     if (tokens[0] == "bus")
     {
         const int index = indexOf(tokens[1], numBuses);
-        return index >= 0 && getMixOn(buses[(size_t) index], tokens, 2, value);
+
+        if (index < 0)
+            return false;
+
+        if (tokens.size() >= 4 && tokens[2] == "mix" && tokens[3] == "st")
+        {
+            value = buses[(size_t) index].toMain.load(std::memory_order_relaxed);
+            return true;
+        }
+
+        return getMixOn(buses[(size_t) index], tokens, 2, value);
     }
 
     if (tokens[0] == "mtx")
