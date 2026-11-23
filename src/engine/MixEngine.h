@@ -52,6 +52,8 @@ private:
         float curR = 0.0f;
         float curPflL = 0.0f;
         float curPflR = 0.0f;
+        float curPost = 0.0f;
+        float curMono = 0.0f;
     };
 
     void ensureCapacity(int samples);
@@ -69,6 +71,13 @@ private:
     std::array<std::array<float, numBuses>, numChannels> sendSmooth {};
     std::array<float, numBuses> busSmoothL {};
     std::array<float, numBuses> busSmoothR {};
+    std::array<float, numBuses> busPostSmooth {};
+    std::array<float, numBuses> busMonoSmooth {};
+    std::array<float, numMatrices> matrixSmooth {};
+    std::array<std::array<float, numMatrices>, numBuses> busMatrixSmooth {};
+    std::array<float, numMatrices> mainStereoMatrixSmooth {};
+    std::array<float, numMatrices> mainMonoMatrixSmooth {};
+    float mainMonoGain = 0.0f;
     std::array<std::atomic<float>, numChannels> channelMeters {};
     std::atomic<float> mainMeter { 0.0f };
     std::atomic<bool> playing { false };

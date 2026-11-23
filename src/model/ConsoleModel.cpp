@@ -212,6 +212,8 @@ bool setDynamicsFloat(Dynamics& dyn, const juce::String& leaf, float value)
         dyn.knee = unit;
     else if (leaf == "mgain")
         dyn.makeup = unit;
+    else if (leaf == "mix")
+        dyn.mix = unit;
     else
         return false;
 
@@ -236,6 +238,8 @@ bool getDynamicsFloat(const Dynamics& dyn, const juce::String& leaf, float& valu
         value = dyn.knee.load(std::memory_order_relaxed);
     else if (leaf == "mgain")
         value = dyn.makeup.load(std::memory_order_relaxed);
+    else if (leaf == "mix")
+        value = dyn.mix.load(std::memory_order_relaxed);
     else
         return false;
 
@@ -397,6 +401,31 @@ void ConsoleModel::setListenMode(ListenMode mode) noexcept
 ListenMode ConsoleModel::getListenMode() const noexcept
 {
     return (ListenMode) listenMode.load(std::memory_order_relaxed);
+}
+
+void ConsoleModel::setSpeakerSource(int source) noexcept
+{
+    speakerSource.store(std::clamp(source, 0, numBuses), std::memory_order_relaxed);
+}
+
+int ConsoleModel::getSpeakerSource() const noexcept
+{
+    return speakerSource.load(std::memory_order_relaxed);
+}
+
+std::atomic<float>& ConsoleModel::mainMatrixLevel(bool monoBus, int matrix) noexcept
+{
+    return monoBus ? mainMonoMatrixLevel[(size_t) matrix] : mainStereoMatrix[(size_t) matrix];
+}
+
+const std::atomic<float>& ConsoleModel::mainMatrixLevel(bool monoBus, int matrix) const noexcept
+{
+    return monoBus ? mainMonoMatrixLevel[(size_t) matrix] : mainStereoMatrix[(size_t) matrix];
+}
+
+std::atomic<int>& ConsoleModel::mainMatrixPre(bool monoBus, int matrix) noexcept
+{
+    return monoBus ? mainMonoMatrixPre[(size_t) matrix] : mainStereoMatrixPre[(size_t) matrix];
 }
 
 int ConsoleModel::addSource(const juce::String& name, const juce::String& filePath)
@@ -609,8 +638,20 @@ bool ConsoleModel::assignFloat(const juce::String& path, float value)
             return true;
         }
 
+        if (tokens.size() >= 5 && tokens[2] == "dyn" && tokens[3] == "filter" && tokens[4] == "f")
+        {
+            strip.comp.filterFreq = clampUnit(value);
+            return true;
+        }
+
         if (tokens.size() >= 4 && tokens[2] == "gate")
             return setDynamicsFloat(strip.gate, tokens[3], value);
+
+        if (tokens.size() >= 4 && tokens[2] == "mix" && tokens[3] == "mlevel")
+        {
+            strip.monoLevel.store(clampUnit(value), std::memory_order_relaxed);
+            return true;
+        }
 
         if (tokens.size() >= 5 && tokens[2] == "mix" && tokens[3].containsOnly("0123456789") && tokens[4] == "level")
         {
@@ -629,7 +670,30 @@ bool ConsoleModel::assignFloat(const juce::String& path, float value)
     if (tokens[0] == "bus")
     {
         const int index = indexOf(tokens[1], numBuses);
-        return index >= 0 && setMixFloat(buses[(size_t) index], tokens, 2, value, numEqBands);
+
+        if (index < 0)
+            return false;
+
+        auto& strip = buses[(size_t) index];
+
+        if (tokens.size() >= 4 && tokens[2] == "mix" && tokens[3] == "mlevel")
+        {
+            strip.monoLevel.store(clampUnit(value), std::memory_order_relaxed);
+            return true;
+        }
+
+        if (tokens.size() >= 5 && tokens[2] == "mix" && tokens[3].containsOnly("0123456789") && tokens[4] == "level")
+        {
+            const int matrix = indexOf(tokens[3], numMatrices);
+
+            if (matrix < 0)
+                return false;
+
+            strip.matrixLevel[matrix].store(clampUnit(value), std::memory_order_relaxed);
+            return true;
+        }
+
+        return setMixFloat(strip, tokens, 2, value, numEqBands);
     }
 
     if (tokens[0] == "mtx")
@@ -663,11 +727,23 @@ bool ConsoleModel::assignFloat(const juce::String& path, float value)
 
     if (tokens[0] == "main" && tokens.size() >= 4 && tokens[2] == "mix")
     {
-        auto& mix = tokens[1] == "m" ? mainMono : mainSt;
-
         if (tokens[1] != "m" && tokens[1] != "st")
             return false;
 
+        const bool monoBus = tokens[1] == "m";
+
+        if (tokens.size() >= 5 && tokens[3].containsOnly("0123456789") && tokens[4] == "level")
+        {
+            const int matrix = indexOf(tokens[3], numMatrices);
+
+            if (matrix < 0)
+                return false;
+
+            mainMatrixLevel(monoBus, matrix).store(clampUnit(value), std::memory_order_relaxed);
+            return true;
+        }
+
+        auto& mix = monoBus ? mainMono : mainSt;
         return setMixFloat(mix, tokens, 2, value, numEqBands);
     }
 
@@ -720,8 +796,20 @@ bool ConsoleModel::getFloat(const juce::String& path, float& value) const
             return true;
         }
 
+        if (tokens.size() >= 5 && tokens[2] == "dyn" && tokens[3] == "filter" && tokens[4] == "f")
+        {
+            value = strip.comp.filterFreq.load(std::memory_order_relaxed);
+            return true;
+        }
+
         if (tokens.size() >= 4 && tokens[2] == "gate")
             return getDynamicsFloat(strip.gate, tokens[3], value);
+
+        if (tokens.size() >= 4 && tokens[2] == "mix" && tokens[3] == "mlevel")
+        {
+            value = strip.monoLevel.load(std::memory_order_relaxed);
+            return true;
+        }
 
         if (tokens.size() >= 5 && tokens[2] == "mix" && tokens[3].containsOnly("0123456789") && tokens[4] == "level")
         {
@@ -740,7 +828,30 @@ bool ConsoleModel::getFloat(const juce::String& path, float& value) const
     if (tokens[0] == "bus")
     {
         const int index = indexOf(tokens[1], numBuses);
-        return index >= 0 && getMixFloat(buses[(size_t) index], tokens, 2, value, numEqBands);
+
+        if (index < 0)
+            return false;
+
+        const auto& strip = buses[(size_t) index];
+
+        if (tokens.size() >= 4 && tokens[2] == "mix" && tokens[3] == "mlevel")
+        {
+            value = strip.monoLevel.load(std::memory_order_relaxed);
+            return true;
+        }
+
+        if (tokens.size() >= 5 && tokens[2] == "mix" && tokens[3].containsOnly("0123456789") && tokens[4] == "level")
+        {
+            const int matrix = indexOf(tokens[3], numMatrices);
+
+            if (matrix < 0)
+                return false;
+
+            value = strip.matrixLevel[matrix].load(std::memory_order_relaxed);
+            return true;
+        }
+
+        return getMixFloat(strip, tokens, 2, value, numEqBands);
     }
 
     if (tokens[0] == "mtx")
@@ -777,7 +888,20 @@ bool ConsoleModel::getFloat(const juce::String& path, float& value) const
         if (tokens[1] != "m" && tokens[1] != "st")
             return false;
 
-        const auto& mix = tokens[1] == "m" ? mainMono : mainSt;
+        const bool monoBus = tokens[1] == "m";
+
+        if (tokens.size() >= 5 && tokens[2] == "mix" && tokens[3].containsOnly("0123456789") && tokens[4] == "level")
+        {
+            const int matrix = indexOf(tokens[3], numMatrices);
+
+            if (matrix < 0)
+                return false;
+
+            value = mainMatrixLevel(monoBus, matrix).load(std::memory_order_relaxed);
+            return true;
+        }
+
+        const auto& mix = monoBus ? mainMono : mainSt;
         return getMixFloat(mix, tokens, 2, value, numEqBands);
     }
 
@@ -907,9 +1031,69 @@ bool ConsoleModel::assignInt(const juce::String& path, int value)
             return true;
         }
 
+        if (tokens.size() >= 4 && tokens[2] == "gate" && tokens[3] == "mode")
+        {
+            strip.gate.mode = std::clamp(value, 0, 4);
+            return true;
+        }
+
+        if (tokens.size() >= 4 && tokens[2] == "eq" && tokens[3] == "on")
+        {
+            strip.eqOn = value != 0 ? 1 : 0;
+            return true;
+        }
+
+        if (tokens.size() >= 4 && tokens[2] == "dyn" && tokens[3] == "mode")
+        {
+            strip.comp.mode = value != 0 ? 1 : 0;
+            return true;
+        }
+
+        if (tokens.size() >= 4 && tokens[2] == "dyn" && tokens[3] == "det")
+        {
+            strip.comp.detect = value != 0 ? 1 : 0;
+            return true;
+        }
+
+        if (tokens.size() >= 4 && tokens[2] == "dyn" && tokens[3] == "env")
+        {
+            strip.comp.envelope = value != 0 ? 1 : 0;
+            return true;
+        }
+
+        if (tokens.size() >= 4 && tokens[2] == "dyn" && tokens[3] == "pos")
+        {
+            strip.comp.position = value != 0 ? 1 : 0;
+            return true;
+        }
+
+        if (tokens.size() >= 4 && tokens[2] == "dyn" && tokens[3] == "auto")
+        {
+            strip.comp.autoTime = value != 0 ? 1 : 0;
+            return true;
+        }
+
+        if (tokens.size() >= 5 && tokens[2] == "dyn" && tokens[3] == "filter" && tokens[4] == "on")
+        {
+            strip.comp.filterOn = value != 0 ? 1 : 0;
+            return true;
+        }
+
+        if (tokens.size() >= 5 && tokens[2] == "dyn" && tokens[3] == "filter" && tokens[4] == "type")
+        {
+            strip.comp.filterType = std::clamp(value, 0, 8);
+            return true;
+        }
+
         if (tokens.size() >= 4 && tokens[2] == "mix" && tokens[3] == "st")
         {
             strip.mainAssign.store(value != 0 ? 1 : 0, std::memory_order_relaxed);
+            return true;
+        }
+
+        if (tokens.size() >= 4 && tokens[2] == "mix" && tokens[3] == "mono")
+        {
+            strip.monoAssign.store(value != 0 ? 1 : 0, std::memory_order_relaxed);
             return true;
         }
 
@@ -943,13 +1127,46 @@ bool ConsoleModel::assignInt(const juce::String& path, int value)
             return true;
         }
 
+        if (tokens.size() >= 4 && tokens[2] == "mix" && tokens[3] == "mono")
+        {
+            buses[(size_t) index].toMono.store(value != 0 ? 1 : 0, std::memory_order_relaxed);
+            return true;
+        }
+
+        if (tokens.size() >= 5 && tokens[2] == "mix" && tokens[3].containsOnly("0123456789") && tokens[4] == "tap")
+        {
+            const int matrix = indexOf(tokens[3], numMatrices);
+
+            if (matrix < 0)
+                return false;
+
+            buses[(size_t) index].matrixPre[matrix].store(value != 0 ? 1 : 0, std::memory_order_relaxed);
+            return true;
+        }
+
         return setMixOn(buses[(size_t) index], tokens, 2, value);
     }
 
     if (tokens[0] == "mtx")
     {
         const int index = indexOf(tokens[1], numMatrices);
-        return index >= 0 && setMixOn(matrices[(size_t) index], tokens, 2, value);
+
+        if (index < 0)
+            return false;
+
+        if (tokens.size() >= 4 && tokens[2] == "mix" && tokens[3] == "st")
+        {
+            matrices[(size_t) index].toMain.store(value != 0 ? 1 : 0, std::memory_order_relaxed);
+            return true;
+        }
+
+        if (tokens.size() >= 4 && tokens[2] == "mix" && tokens[3] == "mono")
+        {
+            matrices[(size_t) index].toMono.store(value != 0 ? 1 : 0, std::memory_order_relaxed);
+            return true;
+        }
+
+        return setMixOn(matrices[(size_t) index], tokens, 2, value);
     }
 
     if (tokens[0] == "main" && tokens.size() >= 3 && (tokens[1] == "st" || tokens[1] == "m"))
@@ -1109,9 +1326,69 @@ bool ConsoleModel::getInt(const juce::String& path, int& value) const
             return true;
         }
 
+        if (tokens.size() >= 4 && tokens[2] == "gate" && tokens[3] == "mode")
+        {
+            value = strip.gate.mode.load(std::memory_order_relaxed);
+            return true;
+        }
+
+        if (tokens.size() >= 4 && tokens[2] == "eq" && tokens[3] == "on")
+        {
+            value = strip.eqOn.load(std::memory_order_relaxed);
+            return true;
+        }
+
+        if (tokens.size() >= 4 && tokens[2] == "dyn" && tokens[3] == "mode")
+        {
+            value = strip.comp.mode.load(std::memory_order_relaxed);
+            return true;
+        }
+
+        if (tokens.size() >= 4 && tokens[2] == "dyn" && tokens[3] == "det")
+        {
+            value = strip.comp.detect.load(std::memory_order_relaxed);
+            return true;
+        }
+
+        if (tokens.size() >= 4 && tokens[2] == "dyn" && tokens[3] == "env")
+        {
+            value = strip.comp.envelope.load(std::memory_order_relaxed);
+            return true;
+        }
+
+        if (tokens.size() >= 4 && tokens[2] == "dyn" && tokens[3] == "pos")
+        {
+            value = strip.comp.position.load(std::memory_order_relaxed);
+            return true;
+        }
+
+        if (tokens.size() >= 4 && tokens[2] == "dyn" && tokens[3] == "auto")
+        {
+            value = strip.comp.autoTime.load(std::memory_order_relaxed);
+            return true;
+        }
+
+        if (tokens.size() >= 5 && tokens[2] == "dyn" && tokens[3] == "filter" && tokens[4] == "on")
+        {
+            value = strip.comp.filterOn.load(std::memory_order_relaxed);
+            return true;
+        }
+
+        if (tokens.size() >= 5 && tokens[2] == "dyn" && tokens[3] == "filter" && tokens[4] == "type")
+        {
+            value = strip.comp.filterType.load(std::memory_order_relaxed);
+            return true;
+        }
+
         if (tokens.size() >= 4 && tokens[2] == "mix" && tokens[3] == "st")
         {
             value = strip.mainAssign.load(std::memory_order_relaxed);
+            return true;
+        }
+
+        if (tokens.size() >= 4 && tokens[2] == "mix" && tokens[3] == "mono")
+        {
+            value = strip.monoAssign.load(std::memory_order_relaxed);
             return true;
         }
 
@@ -1145,13 +1422,46 @@ bool ConsoleModel::getInt(const juce::String& path, int& value) const
             return true;
         }
 
+        if (tokens.size() >= 4 && tokens[2] == "mix" && tokens[3] == "mono")
+        {
+            value = buses[(size_t) index].toMono.load(std::memory_order_relaxed);
+            return true;
+        }
+
+        if (tokens.size() >= 5 && tokens[2] == "mix" && tokens[3].containsOnly("0123456789") && tokens[4] == "tap")
+        {
+            const int matrix = indexOf(tokens[3], numMatrices);
+
+            if (matrix < 0)
+                return false;
+
+            value = buses[(size_t) index].matrixPre[matrix].load(std::memory_order_relaxed);
+            return true;
+        }
+
         return getMixOn(buses[(size_t) index], tokens, 2, value);
     }
 
     if (tokens[0] == "mtx")
     {
         const int index = indexOf(tokens[1], numMatrices);
-        return index >= 0 && getMixOn(matrices[(size_t) index], tokens, 2, value);
+
+        if (index < 0)
+            return false;
+
+        if (tokens.size() >= 4 && tokens[2] == "mix" && tokens[3] == "st")
+        {
+            value = matrices[(size_t) index].toMain.load(std::memory_order_relaxed);
+            return true;
+        }
+
+        if (tokens.size() >= 4 && tokens[2] == "mix" && tokens[3] == "mono")
+        {
+            value = matrices[(size_t) index].toMono.load(std::memory_order_relaxed);
+            return true;
+        }
+
+        return getMixOn(matrices[(size_t) index], tokens, 2, value);
     }
 
     if (tokens[0] == "main" && tokens.size() >= 3 && (tokens[1] == "st" || tokens[1] == "m"))
@@ -1340,8 +1650,11 @@ void ConsoleModel::duplicateProcessing(int fromIndex, int toIndex, bool includeP
     to.fader.store(from.fader.load(std::memory_order_relaxed), std::memory_order_relaxed);
     to.on.store(from.on.load(std::memory_order_relaxed), std::memory_order_relaxed);
     to.mainAssign.store(from.mainAssign.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    to.monoAssign.store(from.monoAssign.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    to.monoLevel.store(from.monoLevel.load(std::memory_order_relaxed), std::memory_order_relaxed);
     to.hpf.store(from.hpf.load(std::memory_order_relaxed), std::memory_order_relaxed);
     to.hpfOn.store(from.hpfOn.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    to.eqOn.store(from.eqOn.load(std::memory_order_relaxed), std::memory_order_relaxed);
     to.delayOn.store(from.delayOn.load(std::memory_order_relaxed), std::memory_order_relaxed);
     to.delayTime.store(from.delayTime.load(std::memory_order_relaxed), std::memory_order_relaxed);
 
@@ -1349,12 +1662,22 @@ void ConsoleModel::duplicateProcessing(int fromIndex, int toIndex, bool includeP
         to.pan.store(from.pan.load(std::memory_order_relaxed), std::memory_order_relaxed);
 
     to.gate.on.store(from.gate.on.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    to.gate.mode.store(from.gate.mode.load(std::memory_order_relaxed), std::memory_order_relaxed);
     to.gate.threshold.store(from.gate.threshold.load(std::memory_order_relaxed), std::memory_order_relaxed);
     to.gate.range.store(from.gate.range.load(std::memory_order_relaxed), std::memory_order_relaxed);
     to.gate.attack.store(from.gate.attack.load(std::memory_order_relaxed), std::memory_order_relaxed);
     to.gate.hold.store(from.gate.hold.load(std::memory_order_relaxed), std::memory_order_relaxed);
     to.gate.release.store(from.gate.release.load(std::memory_order_relaxed), std::memory_order_relaxed);
     to.comp.on.store(from.comp.on.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    to.comp.mode.store(from.comp.mode.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    to.comp.detect.store(from.comp.detect.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    to.comp.envelope.store(from.comp.envelope.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    to.comp.position.store(from.comp.position.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    to.comp.autoTime.store(from.comp.autoTime.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    to.comp.filterOn.store(from.comp.filterOn.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    to.comp.filterType.store(from.comp.filterType.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    to.comp.filterFreq.store(from.comp.filterFreq.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    to.comp.mix.store(from.comp.mix.load(std::memory_order_relaxed), std::memory_order_relaxed);
     to.comp.threshold.store(from.comp.threshold.load(std::memory_order_relaxed), std::memory_order_relaxed);
     to.comp.ratio.store(from.comp.ratio.load(std::memory_order_relaxed), std::memory_order_relaxed);
     to.comp.attack.store(from.comp.attack.load(std::memory_order_relaxed), std::memory_order_relaxed);
@@ -1431,15 +1754,28 @@ void ConsoleModel::copyChannel(int channelIndex)
     clipboard.invert = from.invert.load(std::memory_order_relaxed);
     clipboard.on = from.on.load(std::memory_order_relaxed);
     clipboard.mainAssign = from.mainAssign.load(std::memory_order_relaxed);
+    clipboard.monoAssign = from.monoAssign.load(std::memory_order_relaxed);
+    clipboard.monoLevel = from.monoLevel.load(std::memory_order_relaxed);
     clipboard.hpfOn = from.hpfOn.load(std::memory_order_relaxed);
+    clipboard.eqMaster = from.eqOn.load(std::memory_order_relaxed);
     clipboard.delayOn = from.delayOn.load(std::memory_order_relaxed);
     clipboard.gateOn = from.gate.on.load(std::memory_order_relaxed);
+    clipboard.gateMode = from.gate.mode.load(std::memory_order_relaxed);
     clipboard.gateThr = from.gate.threshold.load(std::memory_order_relaxed);
     clipboard.gateRange = from.gate.range.load(std::memory_order_relaxed);
     clipboard.gateAttack = from.gate.attack.load(std::memory_order_relaxed);
     clipboard.gateHold = from.gate.hold.load(std::memory_order_relaxed);
     clipboard.gateRelease = from.gate.release.load(std::memory_order_relaxed);
     clipboard.compOn = from.comp.on.load(std::memory_order_relaxed);
+    clipboard.compMode = from.comp.mode.load(std::memory_order_relaxed);
+    clipboard.compDetect = from.comp.detect.load(std::memory_order_relaxed);
+    clipboard.compEnvelope = from.comp.envelope.load(std::memory_order_relaxed);
+    clipboard.compPosition = from.comp.position.load(std::memory_order_relaxed);
+    clipboard.compAuto = from.comp.autoTime.load(std::memory_order_relaxed);
+    clipboard.compFilterOn = from.comp.filterOn.load(std::memory_order_relaxed);
+    clipboard.compFilterType = from.comp.filterType.load(std::memory_order_relaxed);
+    clipboard.compFilterFreq = from.comp.filterFreq.load(std::memory_order_relaxed);
+    clipboard.compMix = from.comp.mix.load(std::memory_order_relaxed);
     clipboard.compThr = from.comp.threshold.load(std::memory_order_relaxed);
     clipboard.compRatio = from.comp.ratio.load(std::memory_order_relaxed);
     clipboard.compAttack = from.comp.attack.load(std::memory_order_relaxed);
@@ -1474,15 +1810,28 @@ void ConsoleModel::pasteChannel(int channelIndex)
     to.invert.store(clipboard.invert, std::memory_order_relaxed);
     to.on.store(clipboard.on, std::memory_order_relaxed);
     to.mainAssign.store(clipboard.mainAssign, std::memory_order_relaxed);
+    to.monoAssign.store(clipboard.monoAssign, std::memory_order_relaxed);
+    to.monoLevel.store(clipboard.monoLevel, std::memory_order_relaxed);
     to.hpfOn.store(clipboard.hpfOn, std::memory_order_relaxed);
+    to.eqOn.store(clipboard.eqMaster, std::memory_order_relaxed);
     to.delayOn.store(clipboard.delayOn, std::memory_order_relaxed);
     to.gate.on.store(clipboard.gateOn, std::memory_order_relaxed);
+    to.gate.mode.store(clipboard.gateMode, std::memory_order_relaxed);
     to.gate.threshold.store(clipboard.gateThr, std::memory_order_relaxed);
     to.gate.range.store(clipboard.gateRange, std::memory_order_relaxed);
     to.gate.attack.store(clipboard.gateAttack, std::memory_order_relaxed);
     to.gate.hold.store(clipboard.gateHold, std::memory_order_relaxed);
     to.gate.release.store(clipboard.gateRelease, std::memory_order_relaxed);
     to.comp.on.store(clipboard.compOn, std::memory_order_relaxed);
+    to.comp.mode.store(clipboard.compMode, std::memory_order_relaxed);
+    to.comp.detect.store(clipboard.compDetect, std::memory_order_relaxed);
+    to.comp.envelope.store(clipboard.compEnvelope, std::memory_order_relaxed);
+    to.comp.position.store(clipboard.compPosition, std::memory_order_relaxed);
+    to.comp.autoTime.store(clipboard.compAuto, std::memory_order_relaxed);
+    to.comp.filterOn.store(clipboard.compFilterOn, std::memory_order_relaxed);
+    to.comp.filterType.store(clipboard.compFilterType, std::memory_order_relaxed);
+    to.comp.filterFreq.store(clipboard.compFilterFreq, std::memory_order_relaxed);
+    to.comp.mix.store(clipboard.compMix, std::memory_order_relaxed);
     to.comp.threshold.store(clipboard.compThr, std::memory_order_relaxed);
     to.comp.ratio.store(clipboard.compRatio, std::memory_order_relaxed);
     to.comp.attack.store(clipboard.compAttack, std::memory_order_relaxed);

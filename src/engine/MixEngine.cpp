@@ -289,6 +289,10 @@ void MixEngine::snapSmoothers() noexcept
         state.curR = outR;
         state.curPflL = pflL;
         state.curPflR = pflR;
+        const float enabled = model.channel(channel).on.load(std::memory_order_relaxed) != 0 ? 1.0f : 0.0f;
+        state.curPost = faderToGain(model.channel(channel).fader.load(std::memory_order_relaxed)) * enabled;
+        state.curMono = faderToGain(model.channel(channel).monoLevel.load(std::memory_order_relaxed))
+                      * (model.channel(channel).monoAssign.load(std::memory_order_relaxed) != 0 ? 1.0f : 0.0f);
 
         const auto& strip = model.channel(channel);
 
@@ -306,11 +310,29 @@ void MixEngine::snapSmoothers() noexcept
                          * (strip.on.load(std::memory_order_relaxed) != 0 ? 1.0f : 0.0f);
         busSmoothL[(size_t) bus] = balanceL * gain;
         busSmoothR[(size_t) bus] = balanceR * gain;
+        busPostSmooth[(size_t) bus] = gain;
+        busMonoSmooth[(size_t) bus] = faderToGain(strip.monoLevel.load(std::memory_order_relaxed))
+                                    * (strip.toMono.load(std::memory_order_relaxed) != 0 ? 1.0f : 0.0f);
+
+        for (int matrix = 0; matrix < numMatrices; ++matrix)
+            busMatrixSmooth[(size_t) bus][(size_t) matrix] = faderToGain(strip.matrixLevel[matrix].load(std::memory_order_relaxed));
+    }
+
+    for (int matrix = 0; matrix < numMatrices; ++matrix)
+    {
+        const auto& strip = model.matrix(matrix);
+        matrixSmooth[(size_t) matrix] = faderToGain(strip.fader.load(std::memory_order_relaxed))
+                                      * (strip.on.load(std::memory_order_relaxed) != 0 ? 1.0f : 0.0f);
+        mainStereoMatrixSmooth[(size_t) matrix] = faderToGain(model.mainMatrixLevel(false, matrix).load(std::memory_order_relaxed));
+        mainMonoMatrixSmooth[(size_t) matrix] = faderToGain(model.mainMatrixLevel(true, matrix).load(std::memory_order_relaxed));
     }
 
     const float mainFader = faderToGain(model.mainStereo().fader.load(std::memory_order_relaxed));
     const float mainOn = model.mainStereo().on.load(std::memory_order_relaxed) != 0 ? 1.0f : 0.0f;
     mainGain = mainFader * mainOn;
+    const float monoFader = faderToGain(model.mainCenter().fader.load(std::memory_order_relaxed));
+    const float monoOn = model.mainCenter().on.load(std::memory_order_relaxed) != 0 ? 1.0f : 0.0f;
+    mainMonoGain = monoFader * monoOn;
 
     bool anySolo = false;
 
@@ -403,10 +425,16 @@ void MixEngine::processChunk(float* left, float* right, int numSamples, juce::in
     std::array<char, numChannels> soloed {};
     std::array<char, numChannels> toMain {};
     std::array<char, numChannels> audible {};
+    std::array<float, numChannels> postTarget {};
+    std::array<float, numChannels> monoTarget {};
     std::array<std::array<float, numBuses>, numChannels> sendTarget {};
     std::array<std::array<char, numBuses>, numChannels> sendIsPre {};
     std::array<float, numBuses> busTargetL {};
     std::array<float, numBuses> busTargetR {};
+    std::array<float, numBuses> busPostTarget {};
+    std::array<float, numBuses> busMonoTarget {};
+    std::array<std::array<float, numMatrices>, numBuses> busMatrixTarget {};
+    std::array<std::array<char, numMatrices>, numBuses> busMatrixPre {};
     std::array<char, numBuses> busToMain {};
     bool anySolo = false;
 
@@ -418,6 +446,9 @@ void MixEngine::processChunk(float* left, float* right, int numSamples, juce::in
         soloed[(size_t) channel] = strip.solo.load(std::memory_order_relaxed) != 0 ? 1 : 0;
         toMain[(size_t) channel] = strip.mainAssign.load(std::memory_order_relaxed) != 0 ? 1 : 0;
         audible[(size_t) channel] = strip.on.load(std::memory_order_relaxed) != 0 ? 1 : 0;
+        postTarget[(size_t) channel] = faderToGain(strip.fader.load(std::memory_order_relaxed)) * audible[(size_t) channel];
+        monoTarget[(size_t) channel] = faderToGain(strip.monoLevel.load(std::memory_order_relaxed))
+                                     * (strip.monoAssign.load(std::memory_order_relaxed) != 0 ? 1.0f : 0.0f);
         anySolo = anySolo || soloed[(size_t) channel] != 0;
 
         for (int bus = 0; bus < numBuses; ++bus)
@@ -437,7 +468,30 @@ void MixEngine::processChunk(float* left, float* right, int numSamples, juce::in
                          * (strip.on.load(std::memory_order_relaxed) != 0 ? 1.0f : 0.0f);
         busTargetL[(size_t) bus] = balanceL * gain;
         busTargetR[(size_t) bus] = balanceR * gain;
+        busPostTarget[(size_t) bus] = gain;
+        busMonoTarget[(size_t) bus] = faderToGain(strip.monoLevel.load(std::memory_order_relaxed))
+                                    * (strip.toMono.load(std::memory_order_relaxed) != 0 ? 1.0f : 0.0f);
         busToMain[(size_t) bus] = strip.toMain.load(std::memory_order_relaxed) != 0 ? 1 : 0;
+
+        for (int matrix = 0; matrix < numMatrices; ++matrix)
+        {
+            busMatrixTarget[(size_t) bus][(size_t) matrix] = faderToGain(strip.matrixLevel[matrix].load(std::memory_order_relaxed));
+            busMatrixPre[(size_t) bus][(size_t) matrix] = strip.matrixPre[matrix].load(std::memory_order_relaxed) != 0 ? 1 : 0;
+        }
+    }
+
+    std::array<float, numMatrices> matrixTarget {};
+    std::array<float, numMatrices> mainStereoMatrixTarget {};
+    std::array<float, numMatrices> mainMonoMatrixTarget {};
+    const int speakerSource = std::clamp(model.getSpeakerSource(), 0, numBuses);
+
+    for (int matrix = 0; matrix < numMatrices; ++matrix)
+    {
+        const auto& strip = model.matrix(matrix);
+        matrixTarget[(size_t) matrix] = faderToGain(strip.fader.load(std::memory_order_relaxed))
+                                      * (strip.on.load(std::memory_order_relaxed) != 0 ? 1.0f : 0.0f);
+        mainStereoMatrixTarget[(size_t) matrix] = faderToGain(model.mainMatrixLevel(false, matrix).load(std::memory_order_relaxed));
+        mainMonoMatrixTarget[(size_t) matrix] = faderToGain(model.mainMatrixLevel(true, matrix).load(std::memory_order_relaxed));
     }
 
     const auto listen = model.getListenMode();
@@ -452,6 +506,7 @@ void MixEngine::processChunk(float* left, float* right, int numSamples, juce::in
     {
         std::array<float, numBuses> busSumL {};
         std::array<float, numBuses> busSumR {};
+        float monoSum = 0.0f;
 
         for (int channel = 0; channel < numChannels; ++channel)
         {
@@ -460,6 +515,8 @@ void MixEngine::processChunk(float* left, float* right, int numSamples, juce::in
             state.curR += (targetR[(size_t) channel] - state.curR) * smoothCoeff;
             state.curPflL += (targetPflL[(size_t) channel] - state.curPflL) * smoothCoeff;
             state.curPflR += (targetPflR[(size_t) channel] - state.curPflR) * smoothCoeff;
+            state.curPost += (postTarget[(size_t) channel] - state.curPost) * smoothCoeff;
+            state.curMono += (monoTarget[(size_t) channel] - state.curMono) * smoothCoeff;
 
             const int source = sourceOf[(size_t) channel];
 
@@ -469,6 +526,7 @@ void MixEngine::processChunk(float* left, float* right, int numSamples, juce::in
             const float input = processed[(size_t) channel * (size_t) scratchCapacity + (size_t) sample];
             const float leftSample = input * state.curL;
             const float rightSample = input * state.curR;
+            monoSum += input * state.curPost * state.curMono;
             peaks[(size_t) channel] = std::max(peaks[(size_t) channel], std::max(std::abs(leftSample), std::abs(rightSample)));
 
             if (toMain[(size_t) channel] != 0)
@@ -510,21 +568,57 @@ void MixEngine::processChunk(float* left, float* right, int numSamples, juce::in
         {
             busSmoothL[(size_t) bus] += (busTargetL[(size_t) bus] - busSmoothL[(size_t) bus]) * smoothCoeff;
             busSmoothR[(size_t) bus] += (busTargetR[(size_t) bus] - busSmoothR[(size_t) bus]) * smoothCoeff;
+            busPostSmooth[(size_t) bus] += (busPostTarget[(size_t) bus] - busPostSmooth[(size_t) bus]) * smoothCoeff;
+            busMonoSmooth[(size_t) bus] += (busMonoTarget[(size_t) bus] - busMonoSmooth[(size_t) bus]) * smoothCoeff;
 
-            if (busToMain[(size_t) bus] == 0)
-                continue;
+            if (busToMain[(size_t) bus] != 0)
+            {
+                mainBufL[(size_t) sample] += busSumL[(size_t) bus] * busSmoothL[(size_t) bus];
+                mainBufR[(size_t) sample] += busSumR[(size_t) bus] * busSmoothR[(size_t) bus];
+            }
 
-            mainBufL[(size_t) sample] += busSumL[(size_t) bus] * busSmoothL[(size_t) bus];
-            mainBufR[(size_t) sample] += busSumR[(size_t) bus] * busSmoothR[(size_t) bus];
+            const float busMono = 0.5f * (busSumL[(size_t) bus] + busSumR[(size_t) bus]);
+            monoSum += busMono * busPostSmooth[(size_t) bus] * busMonoSmooth[(size_t) bus];
         }
 
         mainGain += (mainTarget - mainGain) * smoothCoeff;
+        const float mainMonoTarget = faderToGain(model.mainCenter().fader.load(std::memory_order_relaxed))
+                                   * (model.mainCenter().on.load(std::memory_order_relaxed) != 0 ? 1.0f : 0.0f);
+        mainMonoGain += (mainMonoTarget - mainMonoGain) * smoothCoeff;
+
+        constexpr float centerGain = 0.70710678f;
+        const float lrL = mainBufL[(size_t) sample] * mainGain;
+        const float lrR = mainBufR[(size_t) sample] * mainGain;
+        for (int matrix = 0; matrix < numMatrices; ++matrix)
+        {
+            matrixSmooth[(size_t) matrix] += (matrixTarget[(size_t) matrix] - matrixSmooth[(size_t) matrix]) * smoothCoeff;
+            mainStereoMatrixSmooth[(size_t) matrix] += (mainStereoMatrixTarget[(size_t) matrix] - mainStereoMatrixSmooth[(size_t) matrix]) * smoothCoeff;
+            mainMonoMatrixSmooth[(size_t) matrix] += (mainMonoMatrixTarget[(size_t) matrix] - mainMonoMatrixSmooth[(size_t) matrix]) * smoothCoeff;
+
+            for (int bus = 0; bus < numBuses; ++bus)
+            {
+                auto& send = busMatrixSmooth[(size_t) bus][(size_t) matrix];
+                const float target = busMatrixTarget[(size_t) bus][(size_t) matrix];
+                send += (target - send) * smoothCoeff;
+            }
+        }
+
+        const float center = monoSum * mainMonoGain * centerGain;
+        float programL = lrL + center;
+        float programR = lrR + center;
+
+        if (speakerSource > 0)
+        {
+            const int bus = speakerSource - 1;
+            programL = busSumL[(size_t) bus] * busSmoothL[(size_t) bus];
+            programR = busSumR[(size_t) bus] * busSmoothR[(size_t) bus];
+        }
+
         listenFade += (listenTarget - listenFade) * smoothCoeff;
 
         const float fade = listenFade;
-        const float mainScale = mainGain * (1.0f - fade);
-        const float mixedL = mainBufL[(size_t) sample] * mainScale + soloBufL[(size_t) sample] * fade;
-        const float mixedR = mainBufR[(size_t) sample] * mainScale + soloBufR[(size_t) sample] * fade;
+        const float mixedL = programL * (1.0f - fade) + soloBufL[(size_t) sample] * fade;
+        const float mixedR = programR * (1.0f - fade) + soloBufR[(size_t) sample] * fade;
         left[sample] = mixedL;
 
         if (right != nullptr)

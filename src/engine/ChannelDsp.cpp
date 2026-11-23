@@ -154,20 +154,89 @@ void ChannelDsp::configure(const Channel& channel) noexcept
             setPeak(eq[band], frequency, q, gain, sampleRate);
     }
 
+    eqEnabled = channel.eqOn.load(std::memory_order_relaxed) != 0;
+
     gateEnabled = channel.gate.on.load(std::memory_order_relaxed) != 0;
-    gateThreshold = dbToGain(gateThresholdDb(loadUnit(channel.gate.threshold)));
-    gateFloor = dbToGain(-gateRangeDb(loadUnit(channel.gate.range)));
+    gateMode = std::clamp(channel.gate.mode.load(std::memory_order_relaxed), 0, 4);
+    gateThresholdDb = vc::gateThresholdDb(loadUnit(channel.gate.threshold));
+    gateRangeDb = vc::gateRangeDb(loadUnit(channel.gate.range));
+    gateThreshold = dbToGain(gateThresholdDb);
+    gateFloor = dbToGain(-gateRangeDb);
     gateAttack = timeCoefficient(dynamicsMilliseconds(loadUnit(channel.gate.attack), 0.1f, 120.0f), sampleRate);
     gateRelease = timeCoefficient(dynamicsMilliseconds(loadUnit(channel.gate.release), 5.0f, 4000.0f), sampleRate);
     gateHoldSamples = (int) std::lround(dynamicsMilliseconds(loadUnit(channel.gate.hold), 0.1f, 2000.0f) * 0.001 * sampleRate);
 
     compEnabled = channel.comp.on.load(std::memory_order_relaxed) != 0;
+    compMode = channel.comp.mode.load(std::memory_order_relaxed) != 0 ? 1 : 0;
+    compPre = channel.comp.position.load(std::memory_order_relaxed) != 0;
+    compRms = channel.comp.detect.load(std::memory_order_relaxed) != 0;
+    compLog = channel.comp.envelope.load(std::memory_order_relaxed) != 0;
     compThresholdDb = vc::compThresholdDb(loadUnit(channel.comp.threshold));
     compRatio = vc::compRatio(loadUnit(channel.comp.ratio));
     compKnee = compKneeDb(loadUnit(channel.comp.knee));
-    compMakeup = dbToGain(compMakeupDb(loadUnit(channel.comp.makeup)));
-    compAttack = timeCoefficient(dynamicsMilliseconds(loadUnit(channel.comp.attack), 0.1f, 120.0f), sampleRate);
-    compRelease = timeCoefficient(dynamicsMilliseconds(loadUnit(channel.comp.release), 5.0f, 4000.0f), sampleRate);
+    compMakeupDb = vc::compMakeupDb(loadUnit(channel.comp.makeup));
+    compMix = clamp01(loadUnit(channel.comp.mix));
+    const bool automatic = channel.comp.autoTime.load(std::memory_order_relaxed) != 0;
+    const float attackMs = automatic ? 10.0f : dynamicsMilliseconds(loadUnit(channel.comp.attack), 0.1f, 120.0f);
+    const float releaseMs = automatic ? 120.0f : dynamicsMilliseconds(loadUnit(channel.comp.release), 5.0f, 4000.0f);
+    compAttack = timeCoefficient(attackMs, sampleRate);
+    compRelease = timeCoefficient(releaseMs, sampleRate);
+    compHoldSamples = (int) std::lround(dynamicsMilliseconds(loadUnit(channel.comp.hold), 0.1f, 2000.0f) * 0.001 * sampleRate);
+    compFilterEnabled = channel.comp.filterOn.load(std::memory_order_relaxed) != 0;
+    configureKeyFilter(channel.comp, compFilterKind, compFilterPole, compKeyFilter);
+}
+
+void ChannelDsp::configureKeyFilter(const Dynamics& dynamics, int& kind, float& pole, Biquad& filter) noexcept
+{
+    const float frequency = eqFrequencyHz(loadUnit(dynamics.filterFreq));
+    const int type = std::clamp(dynamics.filterType.load(std::memory_order_relaxed), 0, 8);
+    const float coefficient = 1.0f - std::exp(-2.0f * 3.14159265358979323846f * frequency / (float) std::max(sampleRate, 1.0));
+
+    if (type == 0)
+    {
+        kind = 0;
+        pole = coefficient;
+        return;
+    }
+
+    if (type == 2)
+    {
+        kind = 1;
+        pole = coefficient;
+        return;
+    }
+
+    kind = 2;
+
+    if (type == 1)
+        setHighPass(filter, frequency, sampleRate);
+    else if (type == 3)
+        setLowPass(filter, frequency, sampleRate);
+    else
+    {
+        const float q = type == 4 ? 1.0f : type == 5 ? 2.0f : type == 6 ? 3.0f : type == 7 ? 5.0f : 10.0f;
+        setPeak(filter, frequency, q, 12.0f, sampleRate);
+    }
+}
+
+float ChannelDsp::filterKey(float sample, bool enabled, int kind, float pole, float& state, Biquad& filter) noexcept
+{
+    if (! enabled)
+        return sample;
+
+    if (kind == 0)
+    {
+        state += pole * (sample - state);
+        return sample - state;
+    }
+
+    if (kind == 1)
+    {
+        state += pole * (sample - state);
+        return state;
+    }
+
+    return filter.tick(sample);
 }
 
 float ChannelDsp::delayTrimAndHpf(float sample) noexcept
@@ -190,6 +259,9 @@ float ChannelDsp::delayTrimAndHpf(float sample) noexcept
 
 float ChannelDsp::shape(float sample) noexcept
 {
+    if (! eqEnabled)
+        return sample;
+
     float shaped = sample;
 
     for (auto& band : eq)
@@ -207,10 +279,21 @@ float ChannelDsp::gateGain(float key) noexcept
     const float follow = magnitude > gateEnvelope ? gateAttack : gateRelease;
     gateEnvelope += (magnitude - gateEnvelope) * follow;
 
-    if (gateEnvelope >= gateThreshold)
+    const bool open = gateEnvelope >= gateThreshold;
+    float target = open ? 1.0f : gateFloor;
+
+    if (gateMode == 4)
+        target = open ? gateFloor : 1.0f;
+    else if (gateMode != 0)
+    {
+        const float levelDb = 20.0f * std::log10(gateEnvelope + 1.0e-8f);
+        target = dbToGain(gateOutputDb(levelDb, gateMode, gateThresholdDb, gateRangeDb) - levelDb);
+    }
+
+    if (target >= gateLevel)
     {
         gateHoldLeft = gateHoldSamples;
-        gateLevel += (1.0f - gateLevel) * gateAttack;
+        gateLevel += (target - gateLevel) * gateAttack;
     }
     else if (gateHoldLeft > 0)
     {
@@ -218,7 +301,7 @@ float ChannelDsp::gateGain(float key) noexcept
     }
     else
     {
-        gateLevel += (gateFloor - gateLevel) * gateRelease;
+        gateLevel += (target - gateLevel) * gateRelease;
     }
 
     return gateLevel;
@@ -229,33 +312,48 @@ float ChannelDsp::compressorGain(float key) noexcept
     if (! compEnabled)
         return 1.0f;
 
-    const float magnitude = std::abs(key);
-    const float follow = magnitude > compEnvelope ? compAttack : compRelease;
-    compEnvelope += (magnitude - compEnvelope) * follow;
-    const float levelDb = 20.0f * std::log10(compEnvelope + 1.0e-8f);
-    const float over = levelDb - compThresholdDb;
-    const float slope = 1.0f / std::max(compRatio, 1.01f) - 1.0f;
-    float reduction = 0.0f;
+    const float keyed = filterKey(key, compFilterEnabled, compFilterKind, compFilterPole, compFilterState, compKeyFilter);
+    float magnitude = std::abs(keyed);
 
-    if (compKnee <= 0.05f)
+    if (compRms)
     {
-        if (over > 0.0f)
-            reduction = over * slope;
-    }
-    else if (over > compKnee * 0.5f)
-    {
-        reduction = over * slope;
-    }
-    else if (over > -compKnee * 0.5f)
-    {
-        const float soft = over + compKnee * 0.5f;
-        reduction = slope * soft * soft / (2.0f * compKnee);
+        compPower += (magnitude * magnitude - compPower) * compAttack;
+        magnitude = std::sqrt(std::max(compPower, 0.0f));
     }
 
-    const float target = dbToGain(reduction) * compMakeup;
-    const float followGain = target < compLevel ? compAttack : compRelease;
-    compLevel += (target - compLevel) * followGain;
-    return compLevel;
+    if (compLog)
+    {
+        const float decibels = 20.0f * std::log10(magnitude + 1.0e-8f);
+        const float follow = decibels > compEnvDb ? compAttack : compRelease;
+        compEnvDb += (decibels - compEnvDb) * follow;
+        magnitude = std::pow(10.0f, compEnvDb / 20.0f);
+    }
+    else
+    {
+        const float follow = magnitude > compEnvelope ? compAttack : compRelease;
+        compEnvelope += (magnitude - compEnvelope) * follow;
+        magnitude = compEnvelope;
+    }
+
+    const float levelDb = 20.0f * std::log10(magnitude + 1.0e-8f);
+    const float outputDb = compressorOutputDb(levelDb, compMode, compThresholdDb, compRatio, compKnee, compMakeupDb);
+    const float target = dbToGain(outputDb - levelDb);
+
+    if (target < compLevel)
+    {
+        compHoldLeft = compHoldSamples;
+        compLevel += (target - compLevel) * compAttack;
+    }
+    else if (compHoldLeft > 0)
+    {
+        --compHoldLeft;
+    }
+    else
+    {
+        compLevel += (target - compLevel) * compRelease;
+    }
+
+    return (1.0f - compMix) + compLevel * compMix;
 }
 
 void ChannelDsp::process(const float* input, float* output, int numSamples, const Channel& channel) noexcept
@@ -270,8 +368,17 @@ void ChannelDsp::process(const float* input, float* output, int numSamples, cons
         const float sample = input != nullptr ? input[i] : 0.0f;
         const float front = delayTrimAndHpf(sample);
         const float gated = front * gateGain(front);
-        const float shaped = shape(gated);
-        output[i] = shaped * compressorGain(shaped);
+
+        if (compPre)
+        {
+            const float compressed = gated * compressorGain(gated);
+            output[i] = shape(compressed);
+        }
+        else
+        {
+            const float shaped = shape(gated);
+            output[i] = shaped * compressorGain(shaped);
+        }
     }
 }
 
@@ -294,15 +401,31 @@ void ChannelDsp::processLinked(ChannelDsp& partner,
         const float frontA = delayTrimAndHpf(inputA != nullptr ? inputA[i] : 0.0f);
         const float frontB = partner.delayTrimAndHpf(inputB != nullptr ? inputB[i] : 0.0f);
         const float gate = gateGain(std::max(std::abs(frontA), std::abs(frontB)));
-        const float shapedA = shape(frontA * gate);
-        const float shapedB = partner.shape(frontB * gate);
-        const float compressed = compressorGain(std::max(std::abs(shapedA), std::abs(shapedB)));
+        const float gatedA = frontA * gate;
+        const float gatedB = frontB * gate;
 
-        if (outputA != nullptr)
-            outputA[i] = shapedA * compressed;
+        if (compPre)
+        {
+            const float compressed = compressorGain(std::max(std::abs(gatedA), std::abs(gatedB)));
 
-        if (outputB != nullptr)
-            outputB[i] = shapedB * compressed;
+            if (outputA != nullptr)
+                outputA[i] = shape(gatedA * compressed);
+
+            if (outputB != nullptr)
+                outputB[i] = partner.shape(gatedB * compressed);
+        }
+        else
+        {
+            const float shapedA = shape(gatedA);
+            const float shapedB = partner.shape(gatedB);
+            const float compressed = compressorGain(std::max(std::abs(shapedA), std::abs(shapedB)));
+
+            if (outputA != nullptr)
+                outputA[i] = shapedA * compressed;
+
+            if (outputB != nullptr)
+                outputB[i] = shapedB * compressed;
+        }
     }
 }
 

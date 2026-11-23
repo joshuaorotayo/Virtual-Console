@@ -11,6 +11,8 @@ namespace vc
 
 class StripBank;
 class BusBank;
+class MatrixBank;
+class MatrixSendPanel;
 
 class MainComponent : public juce::Component,
                       private juce::Timer
@@ -53,6 +55,9 @@ private:
     juce::Label title { {}, "Virtual Console 0.2.0" };
     juce::TextButton sourcesButton { "Sources" };
     juce::TextButton busesButton { "Buses" };
+    juce::TextButton matricesButton { "Matrices" };
+    juce::Label mixLabel { {}, "Mix" };
+    juce::ComboBox mixBox;
     juce::Label outputLabel { {}, "Output" };
     juce::ComboBox outputBox;
     juce::TextButton setupButton { "Setup" };
@@ -69,6 +74,8 @@ private:
     juce::ListBox sourceList { "Sources", nullptr };
     std::unique_ptr<StripBank> strips;
     std::unique_ptr<BusBank> buses;
+    std::unique_ptr<MatrixBank> matrices;
+    std::unique_ptr<MatrixSendPanel> matrixSends;
     std::unique_ptr<ChannelEditor> channelEditor;
     juce::Viewport viewport;
     juce::Label mainLabel { {}, "MAIN" };
@@ -82,6 +89,7 @@ private:
     bool applyingOutput = false;
     bool sourcesOpen = false;
     bool busesOpen = false;
+    bool matricesOpen = false;
     int selectedChannel = 0;
     bool scrubbing = false;
     bool movingTimeline = false;

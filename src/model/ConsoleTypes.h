@@ -44,6 +44,14 @@ struct EqBand
 struct Dynamics
 {
     std::atomic<int> on { 0 };
+    std::atomic<int> mode { 0 };
+    std::atomic<int> detect { 0 };
+    std::atomic<int> envelope { 0 };
+    std::atomic<int> position { 0 };
+    std::atomic<int> autoTime { 0 };
+    std::atomic<int> filterOn { 0 };
+    std::atomic<int> filterType { 0 };
+    std::atomic<float> filterFreq { 0.5f };
     std::atomic<float> threshold { 0.75f };
     std::atomic<float> ratio { 0.5f };
     std::atomic<float> attack { 0.2f };
@@ -52,6 +60,7 @@ struct Dynamics
     std::atomic<float> range { 0.5f };
     std::atomic<float> knee { 0.2f };
     std::atomic<float> makeup { 0.5f };
+    std::atomic<float> mix { 1.0f };
 };
 
 struct MixPoint
@@ -66,6 +75,16 @@ struct MixPoint
 struct Bus : MixPoint
 {
     std::atomic<int> toMain { 0 };
+    std::atomic<int> toMono { 0 };
+    std::atomic<float> monoLevel { 0.75f };
+    std::atomic<float> matrixLevel[numMatrices] {};
+    std::atomic<int> matrixPre[numMatrices] {};
+};
+
+struct Matrix : MixPoint
+{
+    std::atomic<int> toMain { 0 };
+    std::atomic<int> toMono { 0 };
 };
 
 struct Channel : MixPoint
@@ -75,8 +94,11 @@ struct Channel : MixPoint
     std::atomic<int> invert { 0 };
     std::atomic<int> source { -1 };
     std::atomic<int> mainAssign { 1 };
+    std::atomic<int> monoAssign { 0 };
+    std::atomic<float> monoLevel { 0.75f };
     std::atomic<float> hpf { 0.2f };
     std::atomic<int> hpfOn { 0 };
+    std::atomic<int> eqOn { 1 };
     std::atomic<int> delayOn { 0 };
     std::atomic<float> delayTime { 0.0f };
     Dynamics gate {};

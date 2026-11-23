@@ -350,6 +350,38 @@ public:
             file.deleteFile();
         }
 
+        beginTest ("mono and matrix assigns reach the speakers");
+        {
+            ConsoleModel model;
+            MixEngine engine (model);
+            engine.prepareToPlay (32, 48000.0);
+            const int source = engine.adoptMemorySource (std::vector<float> (128, 1.0f), 48000.0, "center");
+            routeSource (model, source, 0, { 0 });
+            expect (model.setInt ("/ch/01/mix/st", 0));
+            expect (model.setInt ("/ch/01/mix/mono", 1));
+            expect (model.setFloat ("/ch/01/mix/mlevel", 0.75f));
+            engine.play();
+            engine.snapSmoothers();
+            auto block = renderBlock (engine, 32);
+            expectWithinAbsoluteError (block.left[8], 0.7071f, 0.03f);
+            expectWithinAbsoluteError (block.right[8], 0.7071f, 0.03f);
+
+            expect (model.setInt ("/ch/01/mix/mono", 0));
+            expect (model.setFloat ("/ch/01/mix/01/level", 0.75f));
+            expect (model.setFloat ("/bus/01/mix/01/level", 0.75f));
+            expect (model.setInt ("/mtx/01/mix/st", 1));
+            engine.snapSmoothers();
+            block = renderBlock (engine, 32);
+            expectWithinAbsoluteError (block.left[8], 0.0f, 0.02f);
+            expectWithinAbsoluteError (block.right[8], 0.0f, 0.02f);
+
+            model.setSpeakerSource (1);
+            engine.snapSmoothers();
+            block = renderBlock (engine, 32);
+            expectWithinAbsoluteError (block.left[8], 0.7071f, 0.03f);
+            expectWithinAbsoluteError (block.right[8], 0.7071f, 0.03f);
+        }
+
         beginTest ("a bus send reaches the main mix");
         {
             ConsoleModel model;
@@ -398,6 +430,15 @@ public:
             model.setFloat ("/ch/01/eq/3/q", 0.5f);
         });
         expectWithinAbsoluteError (tailPeak (boosted), std::pow (10.0f, 15.0f / 20.0f), 0.6f, "1 kHz peak boost");
+
+        auto bypassed = renderTone (4800, 1000.0f, [&] (ConsoleModel& model)
+        {
+            model.setFloat ("/ch/01/eq/3/f", eqFreq);
+            model.setFloat ("/ch/01/eq/3/g", 1.0f);
+            model.setFloat ("/ch/01/eq/3/q", 0.5f);
+            model.setInt ("/ch/01/eq/on", 0);
+        });
+        expectLessThan (tailPeak (bypassed), 1.2f, "EQ bypass leaves the tone near unity");
 
         auto filtered = renderTone (4000, 100.0f, [] (ConsoleModel& model)
         {

@@ -113,4 +113,63 @@ inline float timeCoefficient(float milliseconds, double sampleRate) noexcept
     return 1.0f - std::exp(-1.0f / samples);
 }
 
+// Gain change in dB for a downward compressor. Negative means attenuation.
+inline float compressorReductionDb(float overDb, float ratio, float kneeDb) noexcept
+{
+    const float slope = 1.0f / std::max(ratio, 1.01f) - 1.0f;
+
+    if (kneeDb <= 0.05f)
+        return overDb > 0.0f ? overDb * slope : 0.0f;
+
+    if (overDb > kneeDb * 0.5f)
+        return overDb * slope;
+
+    if (overDb > -kneeDb * 0.5f)
+    {
+        const float soft = overDb + kneeDb * 0.5f;
+        return slope * soft * soft / (2.0f * kneeDb);
+    }
+
+    return 0.0f;
+}
+
+// Output level after compression or downward expansion, including makeup.
+inline float compressorOutputDb(float inputDb, int mode, float thresholdDb, float ratio, float kneeDb, float makeupDb) noexcept
+{
+    if (mode == 0)
+        return inputDb + compressorReductionDb(inputDb - thresholdDb, ratio, kneeDb) + makeupDb;
+
+    const float under = thresholdDb - inputDb;
+    const float slope = std::max(ratio, 1.01f) - 1.0f;
+    float reduction = 0.0f;
+
+    if (kneeDb <= 0.05f)
+        reduction = under > 0.0f ? -under * slope : 0.0f;
+    else if (under > kneeDb * 0.5f)
+        reduction = -under * slope;
+    else if (under > -kneeDb * 0.5f)
+    {
+        const float soft = under + kneeDb * 0.5f;
+        reduction = -slope * soft * soft / (2.0f * kneeDb);
+    }
+
+    return inputDb + reduction + makeupDb;
+}
+
+// Output level for the gate transfer. mode 0 gate, 1..3 expanders, 4 ducker.
+inline float gateOutputDb(float inputDb, int mode, float thresholdDb, float rangeDb) noexcept
+{
+    const float depth = std::max(0.0f, rangeDb);
+
+    if (mode == 4)
+        return inputDb >= thresholdDb ? inputDb - depth : inputDb;
+
+    if (inputDb >= thresholdDb || mode == 0)
+        return inputDb >= thresholdDb ? inputDb : inputDb - depth;
+
+    const float ratio = mode == 1 ? 2.0f : mode == 2 ? 3.0f : 4.0f;
+    const float extra = std::min(depth, (thresholdDb - inputDb) * (ratio - 1.0f));
+    return inputDb - extra;
+}
+
 } // namespace vc

@@ -222,6 +222,32 @@ ChannelStrip::ChannelStrip (ConsoleModel& modelToUse, MixEngine& engineToUse, in
         model.setInt (soloPath (index), solo.getToggleState() ? 1 : 0);
     };
     addAndMakeVisible (solo);
+
+    stereo.setClickingTogglesState (true);
+    stereo.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xff3d8f5a));
+    stereo.setTooltip ("Assign to the main stereo bus");
+    int stereoOn = 1;
+    model.getInt (channelLeaf (index, "mix/st"), stereoOn);
+    stereo.setToggleState (stereoOn != 0, juce::dontSendNotification);
+    stereo.onClick = [this]
+    {
+        choose();
+        model.setInt (channelLeaf (index, "mix/st"), stereo.getToggleState() ? 1 : 0);
+    };
+    addAndMakeVisible (stereo);
+
+    mono.setClickingTogglesState (true);
+    mono.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xff3d6f8f));
+    mono.setTooltip ("Assign to the main mono bus");
+    int monoOn = 0;
+    model.getInt (channelLeaf (index, "mix/mono"), monoOn);
+    mono.setToggleState (monoOn != 0, juce::dontSendNotification);
+    mono.onClick = [this]
+    {
+        choose();
+        model.setInt (channelLeaf (index, "mix/mono"), mono.getToggleState() ? 1 : 0);
+    };
+    addAndMakeVisible (mono);
 }
 
 void ChannelStrip::choose()
@@ -245,6 +271,20 @@ void ChannelStrip::refresh()
 
     if (scribble.getButtonText() != channelName)
         scribble.setButtonText (channelName);
+
+    if (! stereo.isMouseButtonDown())
+    {
+        int enabled = 1;
+        model.getInt (channelLeaf (index, "mix/st"), enabled);
+        stereo.setToggleState (enabled != 0, juce::dontSendNotification);
+    }
+
+    if (! mono.isMouseButtonDown())
+    {
+        int enabled = 0;
+        model.getInt (channelLeaf (index, "mix/mono"), enabled);
+        mono.setToggleState (enabled != 0, juce::dontSendNotification);
+    }
 }
 
 void ChannelStrip::mouseDown (const juce::MouseEvent& event)
@@ -280,6 +320,9 @@ void ChannelStrip::resized()
     auto buttons = area.removeFromBottom (26);
     mute.setBounds (buttons.removeFromLeft (buttons.getWidth() / 2).reduced (2, 0));
     solo.setBounds (buttons.reduced (2, 0));
+    auto assigns = area.removeFromBottom (24);
+    stereo.setBounds (assigns.removeFromLeft (assigns.getWidth() / 2).reduced (2, 0));
+    mono.setBounds (assigns.reduced (2, 0));
 
     area.removeFromBottom (2);
     scale.setBounds (area.removeFromLeft (36));

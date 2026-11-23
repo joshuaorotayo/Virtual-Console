@@ -60,6 +60,8 @@ private:
     FaderScale scale;
     juce::TextButton mute { "M" };
     juce::TextButton solo { "S" };
+    juce::TextButton stereo { "ST" };
+    juce::TextButton mono { "MO" };
 };
 
 } // namespace vc

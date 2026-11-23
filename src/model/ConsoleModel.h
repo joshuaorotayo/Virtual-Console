@@ -36,11 +36,22 @@ public:
 
     MixPoint& mainStereo() noexcept { return mainSt; }
     const MixPoint& mainStereo() const noexcept { return mainSt; }
+    MixPoint& mainCenter() noexcept { return mainMono; }
+    const MixPoint& mainCenter() const noexcept { return mainMono; }
     Bus& bus(int index) noexcept { return buses[(size_t) index]; }
     const Bus& bus(int index) const noexcept { return buses[(size_t) index]; }
+    Matrix& matrix(int index) noexcept { return matrices[(size_t) index]; }
+    const Matrix& matrix(int index) const noexcept { return matrices[(size_t) index]; }
+    std::atomic<float>& mainMatrixLevel(bool monoBus, int matrix) noexcept;
+    const std::atomic<float>& mainMatrixLevel(bool monoBus, int matrix) const noexcept;
+    std::atomic<int>& mainMatrixPre(bool monoBus, int matrix) noexcept;
 
     void setListenMode(ListenMode mode) noexcept;
     ListenMode getListenMode() const noexcept;
+
+    // 0 plays main LR. 1..16 plays that mix bus on the output device.
+    void setSpeakerSource(int source) noexcept;
+    int getSpeakerSource() const noexcept;
 
     int addSource(const juce::String& name, const juce::String& filePath);
     void removeSource(int index);
@@ -73,15 +84,20 @@ public:
 private:
     std::array<Channel, numChannels> channels;
     std::array<Bus, numBuses> buses;
-    std::array<MixPoint, numMatrices> matrices;
+    std::array<Matrix, numMatrices> matrices;
     std::array<MixPoint, numFxReturns> fxReturns;
     std::array<MixPoint, numAuxIns> auxIns;
     std::array<MixPoint, numDcas> dcas;
     MixPoint mainSt;
     MixPoint mainMono;
+    std::atomic<float> mainStereoMatrix[numMatrices] {};
+    std::atomic<int> mainStereoMatrixPre[numMatrices] {};
+    std::atomic<float> mainMonoMatrixLevel[numMatrices] {};
+    std::atomic<int> mainMonoMatrixPre[numMatrices] {};
     std::array<FxSlot, numFxSlots> fx;
     std::array<std::atomic<int>, numMuteGroups> muteGroups;
     std::atomic<int> listenMode { (int) ListenMode::automatic };
+    std::atomic<int> speakerSource { 0 };
     int soloMode = 0;
     std::atomic<int> channelLink[16] {};
     std::atomic<int> inputSource[numRoutableInputs];
@@ -98,7 +114,10 @@ private:
         int invert = 0;
         int on = 1;
         int mainAssign = 1;
+        int monoAssign = 0;
+        float monoLevel = 0.75f;
         int hpfOn = 0;
+        int eqMaster = 1;
         int delayOn = 0;
         int eqType[numChannelEqBands] {};
         float eqFreq[numChannelEqBands] {};
@@ -106,12 +125,22 @@ private:
         float eqQ[numChannelEqBands] {};
         int eqOn[numChannelEqBands] {};
         int gateOn = 0;
+        int gateMode = 0;
         float gateThr = 0.75f;
         float gateRange = 0.5f;
         float gateAttack = 0.2f;
         float gateHold = 0.2f;
         float gateRelease = 0.5f;
         int compOn = 0;
+        int compMode = 0;
+        int compDetect = 0;
+        int compEnvelope = 0;
+        int compPosition = 0;
+        int compAuto = 0;
+        int compFilterOn = 0;
+        int compFilterType = 0;
+        float compFilterFreq = 0.5f;
+        float compMix = 1.0f;
         float compThr = 0.75f;
         float compRatio = 0.5f;
         float compAttack = 0.2f;
