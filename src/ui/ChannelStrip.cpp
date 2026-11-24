@@ -153,6 +153,12 @@ ChannelStrip::ChannelStrip (ConsoleModel& modelToUse, MixEngine& engineToUse, in
     scribble.setTooltip ("Select channel");
     scribble.onClick = [this] { choose(); };
     addAndMakeVisible (scribble);
+    icon.onClick = [this]
+    {
+        choose();
+        openChannelIconPicker (icon, model, index, [this] { refresh(); });
+    };
+    addAndMakeVisible (icon);
     refresh();
 
     styleRotary (pan);
@@ -272,6 +278,10 @@ void ChannelStrip::refresh()
     if (scribble.getButtonText() != channelName)
         scribble.setButtonText (channelName);
 
+    int iconIndex = -1;
+    model.getInt (channelLeaf (index, "config/icon"), iconIndex);
+    icon.setIcon (iconIndex);
+
     if (! stereo.isMouseButtonDown())
     {
         int enabled = 1;
@@ -314,7 +324,9 @@ void ChannelStrip::resized()
 {
     auto area = getLocalBounds().reduced (5);
     area.removeFromTop (12);
-    scribble.setBounds (area.removeFromTop (28).reduced (2, 0));
+    auto nameRow = area.removeFromTop (28);
+    icon.setBounds (nameRow.removeFromLeft (28).reduced (1, 1));
+    scribble.setBounds (nameRow.reduced (2, 0));
     pan.setBounds (area.removeFromTop (46).withSizeKeepingCentre (44, 44));
 
     auto buttons = area.removeFromBottom (26);

@@ -31,6 +31,9 @@ public:
     };
 
     void prepare(double newSampleRate);
+    void ensureCapacity(int samples);
+    float preEqSample(int sample) const noexcept;
+    float postEqSample(int sample) const noexcept;
     void process(const float* input, float* output, int numSamples, const Channel& channel) noexcept;
     void processLinked(ChannelDsp& partner,
                        const float* inputA,
@@ -58,6 +61,8 @@ private:
     bool hpfEnabled = false;
     Biquad hpf;
     Biquad eq[numChannelEqBands];
+    std::vector<float> preEq;
+    std::vector<float> postEq;
     bool eqEnabled = true;
     bool gateEnabled = false;
     int gateMode = 0;

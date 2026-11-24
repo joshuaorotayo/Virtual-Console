@@ -594,6 +594,14 @@ void ConsoleModel::setChannelName(int index, const juce::String& name)
     channelNames[index] = name;
 }
 
+juce::String ConsoleModel::getBusName(int index) const
+{
+    if (index < 0 || index >= numBuses)
+        return {};
+
+    return busNames[index];
+}
+
 bool ConsoleModel::setFloat(const juce::String& path, float value)
 {
     const bool changed = assignFloat(path, value);
@@ -1043,6 +1051,12 @@ bool ConsoleModel::assignInt(const juce::String& path, int value)
             return true;
         }
 
+        if (tokens.size() >= 4 && tokens[2] == "config" && tokens[3] == "icon")
+        {
+            strip.icon = std::clamp(value, -1, 63);
+            return true;
+        }
+
         if (tokens.size() >= 4 && tokens[2] == "dyn" && tokens[3] == "mode")
         {
             strip.comp.mode = value != 0 ? 1 : 0;
@@ -1104,7 +1118,7 @@ bool ConsoleModel::assignInt(const juce::String& path, int value)
             if (bus < 0)
                 return false;
 
-            strip.sendPre[bus].store(value != 0 ? 1 : 0, std::memory_order_relaxed);
+            strip.sendPre[bus].store(std::clamp(value, 0, 4), std::memory_order_relaxed);
             return true;
         }
 
@@ -1335,6 +1349,12 @@ bool ConsoleModel::getInt(const juce::String& path, int& value) const
         if (tokens.size() >= 4 && tokens[2] == "eq" && tokens[3] == "on")
         {
             value = strip.eqOn.load(std::memory_order_relaxed);
+            return true;
+        }
+
+        if (tokens.size() >= 4 && tokens[2] == "config" && tokens[3] == "icon")
+        {
+            value = strip.icon;
             return true;
         }
 

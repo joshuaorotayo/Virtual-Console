@@ -94,6 +94,31 @@ float ChannelDsp::Biquad::tick(float sample) noexcept
     return output;
 }
 
+void ChannelDsp::ensureCapacity(int samples)
+{
+    if (samples <= (int) preEq.size())
+        return;
+
+    preEq.assign((size_t) samples, 0.0f);
+    postEq.assign((size_t) samples, 0.0f);
+}
+
+float ChannelDsp::preEqSample(int sample) const noexcept
+{
+    if (sample < 0 || sample >= (int) preEq.size())
+        return 0.0f;
+
+    return preEq[(size_t) sample];
+}
+
+float ChannelDsp::postEqSample(int sample) const noexcept
+{
+    if (sample < 0 || sample >= (int) postEq.size())
+        return 0.0f;
+
+    return postEq[(size_t) sample];
+}
+
 void ChannelDsp::prepare(double newSampleRate)
 {
     sampleRate = newSampleRate > 0.0 ? newSampleRate : 48000.0;
@@ -368,16 +393,14 @@ void ChannelDsp::process(const float* input, float* output, int numSamples, cons
         const float sample = input != nullptr ? input[i] : 0.0f;
         const float front = delayTrimAndHpf(sample);
         const float gated = front * gateGain(front);
+        const float beforeEq = compPre ? gated * compressorGain(gated) : gated;
+        const float afterEq = shape(beforeEq);
+        output[i] = compPre ? afterEq : afterEq * compressorGain(afterEq);
 
-        if (compPre)
+        if (i < (int) preEq.size())
         {
-            const float compressed = gated * compressorGain(gated);
-            output[i] = shape(compressed);
-        }
-        else
-        {
-            const float shaped = shape(gated);
-            output[i] = shaped * compressorGain(shaped);
+            preEq[(size_t) i] = beforeEq;
+            postEq[(size_t) i] = afterEq;
         }
     }
 }
@@ -403,29 +426,30 @@ void ChannelDsp::processLinked(ChannelDsp& partner,
         const float gate = gateGain(std::max(std::abs(frontA), std::abs(frontB)));
         const float gatedA = frontA * gate;
         const float gatedB = frontB * gate;
+        const float preGain = compPre ? compressorGain(std::max(std::abs(gatedA), std::abs(gatedB))) : 1.0f;
+        const float beforeA = gatedA * preGain;
+        const float beforeB = gatedB * preGain;
+        const float afterA = shape(beforeA);
+        const float afterB = partner.shape(beforeB);
+        const float compressed = compPre ? 1.0f : compressorGain(std::max(std::abs(afterA), std::abs(afterB)));
 
-        if (compPre)
+        if (i < (int) preEq.size())
         {
-            const float compressed = compressorGain(std::max(std::abs(gatedA), std::abs(gatedB)));
-
-            if (outputA != nullptr)
-                outputA[i] = shape(gatedA * compressed);
-
-            if (outputB != nullptr)
-                outputB[i] = partner.shape(gatedB * compressed);
+            preEq[(size_t) i] = beforeA;
+            postEq[(size_t) i] = afterA;
         }
-        else
+
+        if (i < (int) partner.preEq.size())
         {
-            const float shapedA = shape(gatedA);
-            const float shapedB = partner.shape(gatedB);
-            const float compressed = compressorGain(std::max(std::abs(shapedA), std::abs(shapedB)));
-
-            if (outputA != nullptr)
-                outputA[i] = shapedA * compressed;
-
-            if (outputB != nullptr)
-                outputB[i] = shapedB * compressed;
+            partner.preEq[(size_t) i] = beforeB;
+            partner.postEq[(size_t) i] = afterB;
         }
+
+        if (outputA != nullptr)
+            outputA[i] = afterA * compressed;
+
+        if (outputB != nullptr)
+            outputB[i] = afterB * compressed;
     }
 }
 

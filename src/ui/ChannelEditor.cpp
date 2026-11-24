@@ -1,10 +1,12 @@
 #include "ui/ChannelEditor.h"
+#include "ui/ChannelIcons.h"
 
 #include "dsp/FilterDesign.h"
 #include "model/DspLaw.h"
 
 #include <array>
 #include <cmath>
+#include <initializer_list>
 
 namespace vc
 {
@@ -47,6 +49,77 @@ juce::String millisecondsText(float milliseconds)
     return juce::String(milliseconds, milliseconds < 10.0f ? 2 : 1) + " ms";
 }
 
+class BarSliderLook : public juce::LookAndFeel_V4
+{
+public:
+    void drawLinearSlider(juce::Graphics& g,
+                          int x,
+                          int y,
+                          int width,
+                          int height,
+                          float sliderPos,
+                          float minSliderPos,
+                          float maxSliderPos,
+                          juce::Slider::SliderStyle style,
+                          juce::Slider& slider) override
+    {
+        if (style != juce::Slider::LinearVertical)
+        {
+            juce::LookAndFeel_V4::drawLinearSlider(g, x, y, width, height, sliderPos, minSliderPos, maxSliderPos, style, slider);
+            return;
+        }
+
+        auto bounds = juce::Rectangle<float>((float) x, (float) y, (float) width, (float) height).reduced(0.5f, 1.0f);
+        const float barWidth = juce::jlimit(12.0f, 18.0f, bounds.getWidth() * 0.34f);
+        auto bar = bounds.removeFromRight(barWidth);
+        bounds.removeFromRight(4.0f);
+
+        g.setColour(juce::Colour(0xff14181d));
+        g.fillRoundedRectangle(bar, 2.0f);
+
+        const float fillTop = juce::jlimit(bar.getY(), bar.getBottom(), sliderPos);
+        g.setColour(juce::Colour(0xff7eb6d6));
+        g.fillRoundedRectangle(bar.withTop(fillTop), 2.0f);
+
+        g.setColour(juce::Colour(0xffd5e4ee));
+        g.drawRoundedRectangle(bar, 2.0f, 1.25f);
+
+        struct Mark
+        {
+            float db;
+            const char* text;
+        };
+
+        static constexpr Mark marks[] = {
+            { 10.0f, "+10" }, { 5.0f, "+5" }, { 0.0f, "0" }, { -10.0f, "-10" },
+            { -20.0f, "-20" }, { -30.0f, "-30" }, { -40.0f, "-40" }, { -60.0f, "-60" }, { -90.0f, "-inf" }
+        };
+
+        g.setFont(juce::Font(juce::FontOptions(9.0f)));
+        float lastY = -100.0f;
+
+        for (const auto& mark : marks)
+        {
+            const float proportion = (float) slider.valueToProportionOfLength((double) dbToFader(mark.db));
+            const float markY = maxSliderPos + (1.0f - proportion) * (minSliderPos - maxSliderPos);
+            const bool unity = mark.db == 0.0f;
+            const bool endpoint = mark.db >= 10.0f || mark.db <= -90.0f;
+
+            if (! unity && ! endpoint && std::abs(markY - lastY) < 11.0f)
+                continue;
+
+            g.setColour(unity ? juce::Colour(0xfff4f7fb) : juce::Colour(0xff8b95a1));
+            const float tick = unity ? 7.0f : 4.0f;
+            g.fillRect(bar.getX() - tick, markY - (unity ? 1.0f : 0.5f), tick, unity ? 2.0f : 1.0f);
+            g.drawText(mark.text,
+                       juce::Rectangle<float>(bounds.getX(), markY - 6.0f, bounds.getWidth(), 12.0f),
+                       juce::Justification::centredRight,
+                       false);
+            lastY = markY;
+        }
+    }
+};
+
 class UnitSlider : public juce::Component
 {
 public:
@@ -77,6 +150,26 @@ public:
         addAndMakeVisible(slider);
     }
 
+    void setTitle(const juce::String& titleText)
+    {
+        title.setText(titleText, juce::dontSendNotification);
+    }
+
+    ~UnitSlider() override
+    {
+        slider.setLookAndFeel(nullptr);
+    }
+
+    void setVerticalBar(bool shouldBeVertical)
+    {
+        verticalBar = shouldBeVertical;
+
+        if (verticalBar)
+            slider.setLookAndFeel(&barLook);
+
+        resized();
+    }
+
     void refresh()
     {
         if (read == nullptr || slider.isMouseButtonDown() || textBoxFocused())
@@ -88,6 +181,30 @@ public:
     void resized() override
     {
         auto area = getLocalBounds();
+
+        if (verticalBar)
+        {
+            title.setJustificationType(juce::Justification::centred);
+            slider.setSliderStyle(juce::Slider::LinearVertical);
+            slider.setTextBoxStyle(juce::Slider::TextBoxBelow, false, juce::jmax(48, area.getWidth() - 4), 16);
+            title.setBounds(area.removeFromTop(14));
+            slider.setBounds(area);
+            return;
+        }
+
+        if (area.getWidth() > area.getHeight() && area.getHeight() < 64)
+        {
+            title.setJustificationType(juce::Justification::centredLeft);
+            slider.setSliderStyle(juce::Slider::LinearHorizontal);
+            slider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 52, juce::jmin(16, area.getHeight()));
+            title.setBounds(area.removeFromLeft(juce::jmin(68, area.getWidth() / 3)));
+            slider.setBounds(area);
+            return;
+        }
+
+        title.setJustificationType(juce::Justification::centred);
+        slider.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
+        slider.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 72, 16);
         title.setBounds(area.removeFromTop(16));
         slider.setBounds(area);
     }
@@ -105,6 +222,8 @@ private:
     std::function<float()> read;
     std::function<void(float)> write;
     std::function<juce::String(float)> format;
+    bool verticalBar = false;
+    BarSliderLook barLook;
     juce::Label title;
     juce::Slider slider;
 };
@@ -200,6 +319,13 @@ public:
         addAndMakeVisible(box);
     }
 
+    void setShowTitle(bool shouldShow)
+    {
+        showTitle = shouldShow;
+        title.setVisible(shouldShow);
+        resized();
+    }
+
     void refresh()
     {
         if (box.isPopupActive())
@@ -213,6 +339,22 @@ public:
     void resized() override
     {
         auto area = getLocalBounds();
+
+        if (! showTitle)
+        {
+            box.setBounds(area.reduced(1, 1));
+            return;
+        }
+
+        if (area.getHeight() <= 44 && area.getWidth() > 80)
+        {
+            title.setJustificationType(juce::Justification::centredLeft);
+            title.setBounds(area.removeFromLeft(juce::jmin(52, area.getWidth() / 3)));
+            box.setBounds(area.reduced(2, 1));
+            return;
+        }
+
+        title.setJustificationType(juce::Justification::centredLeft);
         title.setBounds(area.removeFromTop(14));
         box.setBounds(area.removeFromTop(24).reduced(1, 0));
     }
@@ -221,11 +363,13 @@ private:
     juce::String path;
     ConsoleModel& model;
     int& index;
+    bool showTitle = true;
     juce::Label title;
     juce::ComboBox box;
 };
 
-class DynamicsGraph : public juce::Component
+class DynamicsGraph : public juce::Component,
+                        public juce::SettableTooltipClient
 {
 public:
     enum class Kind { gate, compressor };
@@ -233,6 +377,45 @@ public:
     DynamicsGraph(ConsoleModel& modelToUse, Kind graphKind)
         : model(modelToUse), kind(graphKind)
     {
+        setTooltip(graphKind == Kind::gate
+                       ? "Drag left and right to set the threshold. Drag down to deepen the range."
+                       : "Drag left and right to set the threshold. Drag up to raise the ratio.");
+    }
+
+    void mouseMove(const juce::MouseEvent& event) override
+    {
+        setMouseCursor(frame().plot.contains(event.position) ? juce::MouseCursor::DraggingHandCursor
+                                                              : juce::MouseCursor::NormalCursor);
+    }
+
+    void mouseDown(const juce::MouseEvent& event) override
+    {
+        const auto plot = frame().plot;
+
+        if (! plot.contains(event.position))
+            return;
+
+        dragging = true;
+        anchorY = event.position.y;
+        secondaryAtAnchor = readUnit(kind == Kind::gate ? "range" : "ratio", 0.5f);
+        writeThreshold(inputForX(event.position.x, plot));
+    }
+
+    void mouseDrag(const juce::MouseEvent& event) override
+    {
+        if (! dragging)
+            return;
+
+        const auto plot = frame().plot;
+        writeThreshold(inputForX(event.position.x, plot));
+        const float travel = (anchorY - event.position.y) / juce::jmax(1.0f, plot.getHeight());
+        const float secondary = kind == Kind::gate ? secondaryAtAnchor - travel : secondaryAtAnchor + travel;
+        writeUnit(kind == Kind::gate ? "range" : "ratio", secondary);
+    }
+
+    void mouseUp(const juce::MouseEvent&) override
+    {
+        dragging = false;
     }
 
     void setChannel(int channelIndex)
@@ -243,84 +426,218 @@ public:
 
     void paint(juce::Graphics& g) override
     {
-        auto bounds = getLocalBounds().toFloat().reduced(2.0f);
-        g.setColour(juce::Colour(0xff15191e));
-        g.fillRoundedRectangle(bounds, 6.0f);
+        auto bounds = getLocalBounds().toFloat().reduced(1.0f);
+        g.setColour(juce::Colour(0xff101418));
+        g.fillRoundedRectangle(bounds, 4.0f);
 
-        auto plot = bounds.reduced(8.0f, 6.0f);
-        auto timing = plot.removeFromBottom(42.0f);
-        plot.removeFromBottom(8.0f);
-        plot.removeFromLeft(34.0f);
+        const auto laidOut = frame();
+        auto readout = laidOut.readout;
+        auto axis = laidOut.axis;
+        auto inputLane = laidOut.inputLane;
+        auto reductionLane = laidOut.reductionLane;
+        auto plot = laidOut.plot;
+
+        drawLevelScale(g, inputLane, juce::Colour(0xff3dce7a), { 0.0f, -12.0f, -24.0f, -36.0f, -48.0f, -60.0f });
+        drawReductionScale(g, reductionLane);
 
         if (plot.getWidth() < 20.0f || plot.getHeight() < 20.0f)
             return;
 
+        const bool enabled = readInt("on") != 0;
+        const auto curveColour = (kind == Kind::gate ? juce::Colour(0xffe07a7a) : juce::Colour(0xffe0b040)).withAlpha(enabled ? 1.0f : 0.35f);
+        const float threshold = thresholdDb();
+        const float depth = rangeDb();
+
         g.setColour(juce::Colour(0xff2a313a));
 
-        for (float db : { 20.0f, 10.0f, 0.0f, -10.0f, -20.0f, -40.0f, -60.0f, -80.0f })
+        for (float db : { 10.0f, 0.0f, -20.0f, -40.0f, -60.0f })
         {
-            const float y = yFor(db, plot);
+            const float y = yForOutput(db, plot);
+
+            if (y < plot.getY() || y > plot.getBottom())
+                continue;
+
             g.drawHorizontalLine(juce::roundToInt(y), plot.getX(), plot.getRight());
-            g.setColour(dim());
-            g.setFont(juce::Font(juce::FontOptions(10.0f)));
-            g.drawText(juce::String(juce::roundToInt(db)), 2, juce::roundToInt(y) - 6, 30, 12, juce::Justification::centredRight, false);
-            g.setColour(juce::Colour(0xff2a313a));
         }
 
-        const float threshold = thresholdDb();
-        const float range = rangeDb();
-        g.setColour(juce::Colour(0xffe07a7a).withAlpha(0.9f));
-        const float thresholdX = xFor(threshold, plot);
-        g.drawVerticalLine(juce::roundToInt(thresholdX), plot.getY(), plot.getBottom());
+        for (float db : { -60.0f, -40.0f, -20.0f, 0.0f })
+        {
+            const float x = xForInput(db, plot);
+            g.setColour(juce::Colour(0xff2a313a));
+            g.drawVerticalLine(juce::roundToInt(x), plot.getY(), plot.getBottom());
+            g.setColour(dim());
+            g.setFont(juce::Font(juce::FontOptions(10.0f)));
+            g.drawText(juce::String(juce::roundToInt(db)),
+                       juce::Rectangle<float>(x - 16.0f, axis.getY(), 32.0f, axis.getHeight()),
+                       juce::Justification::centred,
+                       false);
+        }
+
+        g.setColour(juce::Colour(0xffd7dbe2).withAlpha(0.28f));
+        juce::Path unity;
+        unity.startNewSubPath(xForInput(-80.0f, plot), yForOutput(-80.0f, plot));
+        unity.lineTo(xForInput(0.0f, plot), yForOutput(0.0f, plot));
+        g.strokePath(unity, juce::PathStrokeType(1.0f));
 
         juce::Path curve;
+        juce::Path fill;
         bool started = false;
 
         for (float x = plot.getX(); x <= plot.getRight(); x += 2.0f)
         {
-            const float input = dbForX(x, plot);
-            const float output = std::clamp(outputDb(input, threshold, range), -80.0f, 12.0f);
-            const float y = yFor(output, plot);
+            const float input = inputForX(x, plot);
+            const float output = std::clamp(outputDb(input, threshold, depth), outputFloor, outputCeil);
+            const float y = yForOutput(output, plot);
 
             if (! started)
             {
                 curve.startNewSubPath(x, y);
+                fill.startNewSubPath(x, plot.getBottom());
+                fill.lineTo(x, y);
                 started = true;
             }
             else
             {
                 curve.lineTo(x, y);
+                fill.lineTo(x, y);
             }
         }
 
-        g.setColour(juce::Colour(0xfff4f7fb));
-        g.strokePath(curve, juce::PathStrokeType(2.0f));
-        g.setColour(juce::Colour(0xffe07a7a));
-        g.setFont(juce::Font(juce::FontOptions(11.0f)));
-        g.drawText(decibelText(threshold), juce::roundToInt(thresholdX) + 4, juce::roundToInt(plot.getY()) + 2, 70, 14, juce::Justification::left, false);
+        if (started)
+        {
+            fill.lineTo(plot.getRight(), plot.getBottom());
+            fill.closeSubPath();
+            g.setColour(curveColour.withAlpha(enabled ? 0.18f : 0.06f));
+            g.fillPath(fill);
+        }
 
-        paintTiming(g, timing);
+        g.setColour(curveColour);
+        g.strokePath(curve, juce::PathStrokeType(2.0f));
+
+        const float markerX = xForInput(threshold, plot);
+        const float markerY = yForOutput(std::clamp(outputDb(threshold, threshold, depth), outputFloor, outputCeil), plot);
+        g.setColour(curveColour.withAlpha(0.55f));
+        g.drawVerticalLine(juce::roundToInt(markerX), plot.getY(), plot.getBottom());
+        g.setColour(juce::Colour(0xffd7ecf6));
+        g.fillRect(markerX - 4.0f, markerY - 4.0f, 8.0f, 8.0f);
+        g.setColour(juce::Colour(0xff101418));
+        g.drawRect(markerX - 4.0f, markerY - 4.0f, 8.0f, 8.0f, 1.0f);
+
+        auto label = "THR " + decibelText(threshold);
+
+        if (kind == Kind::gate)
+            label << "    RANGE " << decibelText(depth);
+        else
+            label << "    RATIO " << juce::String(compRatio(readUnit("ratio", 0.5f)), 1) << ":1"
+                  << "    KNEE " << juce::String(compKneeDb(readUnit("knee", 0.2f)), 1) << " dB";
+
+        g.setColour(text());
+        g.setFont(juce::Font(juce::FontOptions(11.0f)));
+        g.drawText(label, readout, juce::Justification::centredLeft, true);
     }
 
 private:
-    static float yFor(float db, juce::Rectangle<float> plot) noexcept
+    struct Frame
     {
-        constexpr float top = 24.0f;
-        constexpr float bottom = -80.0f;
-        const float clamped = std::clamp(db, bottom, top);
-        return plot.getY() + (top - clamped) / (top - bottom) * plot.getHeight();
+        juce::Rectangle<float> plot;
+        juce::Rectangle<float> readout;
+        juce::Rectangle<float> axis;
+        juce::Rectangle<float> inputLane;
+        juce::Rectangle<float> reductionLane;
+    };
+
+    Frame frame() const
+    {
+        auto area = getLocalBounds().toFloat().reduced(5.0f);
+        Frame laidOut;
+        laidOut.readout = area.removeFromBottom(16.0f);
+        laidOut.axis = area.removeFromBottom(13.0f);
+        laidOut.inputLane = area.removeFromLeft(34.0f);
+        laidOut.reductionLane = area.removeFromRight(30.0f);
+        laidOut.plot = area.reduced(4.0f, 2.0f);
+        return laidOut;
     }
 
-    static float xFor(float db, juce::Rectangle<float> plot) noexcept
+    void writeUnit(const char* leaf, float unit)
     {
-        const float clamped = std::clamp(db, -80.0f, 0.0f);
-        return plot.getX() + (clamped + 80.0f) / 80.0f * plot.getWidth();
+        const auto root = kind == Kind::gate ? juce::String("gate/") : juce::String("dyn/");
+        model.setFloat(channelPath(index, root + leaf), clamp01(unit));
+        repaint();
     }
 
-    static float dbForX(float x, juce::Rectangle<float> plot) noexcept
+    void writeThreshold(float decibels)
+    {
+        if (kind == Kind::gate)
+            writeUnit("thr", (decibels + 80.0f) / 80.0f);
+        else
+            writeUnit("thr", (decibels + 60.0f) / 60.0f);
+    }
+
+    static constexpr float inputFloor = -80.0f;
+    static constexpr float inputCeil = 0.0f;
+    static constexpr float outputFloor = -80.0f;
+    static constexpr float outputCeil = 18.0f;
+
+    static float xForInput(float inputDb, juce::Rectangle<float> plot) noexcept
+    {
+        const float clamped = std::clamp(inputDb, inputFloor, inputCeil);
+        return plot.getX() + (clamped - inputFloor) / (inputCeil - inputFloor) * plot.getWidth();
+    }
+
+    static float inputForX(float x, juce::Rectangle<float> plot) noexcept
     {
         const float t = std::clamp((x - plot.getX()) / plot.getWidth(), 0.0f, 1.0f);
-        return -80.0f + t * 80.0f;
+        return inputFloor + t * (inputCeil - inputFloor);
+    }
+
+    static float yForOutput(float outputDb, juce::Rectangle<float> plot) noexcept
+    {
+        const float clamped = std::clamp(outputDb, outputFloor, outputCeil);
+        return plot.getBottom() - (clamped - outputFloor) / (outputCeil - outputFloor) * plot.getHeight();
+    }
+
+    static void drawLevelScale(juce::Graphics& g, juce::Rectangle<float> lane, juce::Colour colour, std::initializer_list<float> marks)
+    {
+        auto bar = lane.removeFromLeft(8.0f).reduced(0.0f, 1.0f);
+        g.setColour(juce::Colour(0xff0c0f12));
+        g.fillRect(bar);
+        g.setColour(colour.withAlpha(0.85f));
+        g.drawRect(bar, 1.0f);
+        g.setFont(juce::Font(juce::FontOptions(9.0f)));
+
+        for (float db : marks)
+        {
+            const float y = bar.getBottom() - (db + 60.0f) / 60.0f * bar.getHeight();
+            g.setColour(colour.withAlpha(0.9f));
+            g.drawHorizontalLine(juce::roundToInt(y), bar.getRight() + 1.0f, bar.getRight() + 4.0f);
+            g.setColour(dim());
+            g.drawText(juce::String(juce::roundToInt(db)),
+                       juce::Rectangle<float>(bar.getRight() + 4.0f, y - 6.0f, lane.getWidth(), 12.0f),
+                       juce::Justification::centredLeft,
+                       false);
+        }
+    }
+
+    static void drawReductionScale(juce::Graphics& g, juce::Rectangle<float> lane)
+    {
+        auto bar = lane.removeFromRight(8.0f).reduced(0.0f, 1.0f);
+        g.setColour(juce::Colour(0xff0c0f12));
+        g.fillRect(bar);
+        g.setColour(juce::Colour(0xffe04b4b).withAlpha(0.9f));
+        g.drawRect(bar, 1.0f);
+        g.setFont(juce::Font(juce::FontOptions(9.0f)));
+
+        for (float db : { 0.0f, 6.0f, 12.0f, 18.0f })
+        {
+            const float y = bar.getY() + db / 18.0f * bar.getHeight();
+            g.setColour(juce::Colour(0xffe07a7a));
+            g.drawHorizontalLine(juce::roundToInt(y), bar.getX() - 4.0f, bar.getX() - 1.0f);
+            g.setColour(dim());
+            g.drawText(juce::String(juce::roundToInt(db)),
+                       juce::Rectangle<float>(lane.getX(), y - 6.0f, bar.getX() - lane.getX() - 4.0f, 12.0f),
+                       juce::Justification::centredRight,
+                       false);
+        }
     }
 
     float readUnit(const char* leaf, float fallback) const
@@ -362,32 +679,12 @@ private:
                                    compMakeupDb(readUnit("mgain", 0.5f)));
     }
 
-    void paintTiming(juce::Graphics& g, juce::Rectangle<float> area) const
-    {
-        const float attack = dynamicsMilliseconds(readUnit("attack", 0.2f), 0.1f, 120.0f);
-        const float hold = dynamicsMilliseconds(readUnit("hold", 0.2f), 0.1f, 2000.0f);
-        const float release = dynamicsMilliseconds(readUnit("release", 0.5f), 5.0f, 4000.0f);
-        const float total = std::max(1.0f, attack + hold + release);
-        auto bar = area.removeFromTop(16.0f);
-        const float attackW = bar.getWidth() * attack / total;
-        const float holdW = bar.getWidth() * hold / total;
-        g.setColour(juce::Colour(0xff3d8f5a));
-        g.fillRect(bar.removeFromLeft(attackW).reduced(1.0f, 2.0f));
-        g.setColour(juce::Colour(0xff3d6f8f));
-        g.fillRect(bar.removeFromLeft(holdW).reduced(1.0f, 2.0f));
-        g.setColour(juce::Colour(0xffe07a7a));
-        g.fillRect(bar.reduced(1.0f, 2.0f));
-        g.setColour(dim());
-        g.setFont(juce::Font(juce::FontOptions(10.0f)));
-        g.drawText("Attack " + millisecondsText(attack) + "    Hold " + millisecondsText(hold) + "    Release " + millisecondsText(release),
-                   area,
-                   juce::Justification::centredLeft,
-                   false);
-    }
-
     ConsoleModel& model;
     Kind kind;
     int index = 0;
+    bool dragging = false;
+    float anchorY = 0.0f;
+    float secondaryAtAnchor = 0.5f;
 };
 
 class EqGraph : public juce::Component,
@@ -833,6 +1130,264 @@ private:
     int index = 0;
     int selected = noneId;
 };
+
+class SendsBoard : public juce::Component
+{
+public:
+    SendsBoard(ConsoleModel& modelToUse, int& channelIndex)
+        : model(modelToUse),
+          channel(channelIndex)
+    {
+    }
+
+    void paint(juce::Graphics& g) override
+    {
+        const auto laid = layout();
+        g.setColour(juce::Colour(0xff171b20));
+        g.fillRoundedRectangle(getLocalBounds().toFloat().reduced(1.0f), 6.0f);
+
+        auto note = juce::Rectangle<int>(laid.origin.getX(), laid.tapTop, laid.gutter - 8, laid.nameTop - laid.tapTop);
+        g.setColour(dim());
+        g.setFont(juce::Font(juce::FontOptions(11.0f)));
+        g.drawFittedText("Changes affect\nselected\nchannel", note, juce::Justification::centred, 4);
+
+        int icon = -1;
+        model.getInt(channelPath(channel, "config/icon"), icon);
+        auto badge = juce::Rectangle<int>(laid.origin.getX() + 8, laid.nameTop, 28, 28);
+        g.setColour(juce::Colour(0xff101418));
+        g.fillRoundedRectangle(badge.toFloat(), 4.0f);
+        if (icon >= 0)
+            drawChannelIcon(g, badge.toFloat().reduced(2.0f), icon);
+        g.setColour(text());
+        g.drawFittedText(model.getChannelName(channel),
+                         juce::Rectangle<int>(badge.getRight() + 4, laid.nameTop, laid.gutter - 44, 28),
+                         juce::Justification::centredLeft,
+                         2);
+
+        g.setFont(juce::Font(juce::FontOptions(10.0f)));
+
+        for (int row = 0; row < tapCount; ++row)
+            g.drawText(tapLabel[row], laid.origin.getX(), laid.tapTop + row * laid.tapH, laid.gutter - 10, laid.tapH, juce::Justification::centredRight, true);
+
+        for (float db : { 10.0f, 0.0f, -10.0f, -20.0f, -40.0f, -90.0f })
+        {
+            const float y = levelY(dbToFader(db), laid);
+            g.setColour(db == 0.0f ? juce::Colour(0xfff4f7fb) : dim());
+            g.drawText(db <= -90.0f ? juce::String("-inf") : juce::String(juce::roundToInt(db)),
+                       laid.origin.getX(),
+                       juce::roundToInt(y) - 7,
+                       laid.gutter - 12,
+                       14,
+                       juce::Justification::centredRight,
+                       false);
+        }
+
+        for (int bus = 0; bus < numBuses; ++bus)
+        {
+            const int x = laid.origin.getX() + laid.gutter + bus * laid.colW;
+            auto column = juce::Rectangle<int>(x, laid.tapTop, laid.colW, getHeight() - laid.tapTop - 4);
+            int tap = 0;
+            model.getInt(channelPath(channel, "mix/" + juce::String(bus + 1).paddedLeft('0', 2) + "/tap"), tap);
+            float level = 0.0f;
+            model.getFloat(channelPath(channel, "mix/" + juce::String(bus + 1).paddedLeft('0', 2) + "/level"), level);
+
+            for (int row = 0; row < tapCount; ++row)
+            {
+                const float cx = (float) x + (float) laid.colW * 0.5f;
+                const float cy = (float) laid.tapTop + ((float) row + 0.5f) * (float) laid.tapH;
+                const bool on = tap == tapValue[row];
+                g.setColour(on ? juce::Colour(0xff3ee0d0) : juce::Colour(0xff6d7782));
+                g.drawEllipse(cx - 5.0f, cy - 5.0f, 10.0f, 10.0f, 1.3f);
+
+                if (on)
+                    g.fillEllipse(cx - 3.0f, cy - 3.0f, 6.0f, 6.0f);
+            }
+
+            auto plate = juce::Rectangle<int>(x + 3, laid.nameTop, laid.colW - 6, laid.nameH);
+            g.setColour(busPlate(bus));
+            g.fillRoundedRectangle(plate.toFloat(), 3.0f);
+            g.setColour(juce::Colours::white);
+            g.setFont(juce::Font(juce::FontOptions(10.0f)).boldened());
+            g.drawFittedText(model.getBusName(bus), plate.reduced(3, 1), juce::Justification::centred, 2);
+
+            const float db = faderToDb(level);
+            g.setColour(text());
+            g.setFont(juce::Font(juce::FontOptions(11.0f)));
+            g.drawText(db <= -90.0f ? juce::String("-inf") : juce::String(db, 1),
+                       x,
+                       laid.dbTop,
+                       laid.colW,
+                       16,
+                       juce::Justification::centred,
+                       false);
+
+            auto lane = juce::Rectangle<float>((float) x + 8.0f, (float) laid.faderTop, (float) laid.colW - 16.0f, (float) (laid.faderBottom - laid.faderTop));
+            g.setColour(juce::Colour(0xff2a313a));
+            g.fillRect(lane.getCentreX() - 1.0f, lane.getY(), 2.0f, lane.getHeight());
+            const float y = levelY(level, laid);
+            g.setColour(juce::Colour(0xff7eb6d6));
+            g.fillRoundedRectangle(lane.getX(), y - 3.0f, lane.getWidth(), 6.0f, 2.0f);
+
+            g.setColour(dim());
+            g.setFont(juce::Font(juce::FontOptions(10.0f)));
+            g.drawText("Bus " + juce::String(bus + 1), x, laid.labelTop, laid.colW, 16, juce::Justification::centred, false);
+            juce::ignoreUnused(column);
+        }
+    }
+
+    void mouseDown(const juce::MouseEvent& event) override
+    {
+        const auto hit = hitTest(event.getPosition());
+
+        if (hit.bus < 0)
+            return;
+
+        if (hit.tap >= 0)
+        {
+            model.setInt(channelPath(channel, "mix/" + busNumber(hit.bus) + "/tap"), tapValue[hit.tap]);
+            repaint();
+            return;
+        }
+
+        if (hit.level)
+        {
+            dragBus = hit.bus;
+            writeLevel(hit.bus, event.position.y);
+        }
+    }
+
+    void mouseDrag(const juce::MouseEvent& event) override
+    {
+        if (dragBus >= 0)
+            writeLevel(dragBus, event.position.y);
+    }
+
+    void mouseUp(const juce::MouseEvent&) override
+    {
+        dragBus = -1;
+    }
+
+    void mouseDoubleClick(const juce::MouseEvent& event) override
+    {
+        const auto hit = hitTest(event.getPosition());
+
+        if (hit.level && hit.bus >= 0)
+        {
+            model.setFloat(channelPath(channel, "mix/" + busNumber(hit.bus) + "/level"), 0.0f);
+            repaint();
+        }
+    }
+
+private:
+    struct Board
+    {
+        juce::Point<int> origin;
+        int gutter = 92;
+        int colW = 1;
+        int tapTop = 0;
+        int tapH = 16;
+        int nameTop = 0;
+        int nameH = 34;
+        int dbTop = 0;
+        int faderTop = 0;
+        int faderBottom = 0;
+        int labelTop = 0;
+    };
+
+    struct Hit
+    {
+        int bus = -1;
+        int tap = -1;
+        bool level = false;
+    };
+
+    static constexpr int tapCount = 5;
+    static constexpr int tapValue[tapCount] = { 2, 3, 1, 0, 4 };
+    static constexpr const char* tapLabel[tapCount] = { "Pre EQ", "Post EQ", "Pre Fader", "Post Fader", "Sub Group" };
+
+    Board layout() const
+    {
+        Board board;
+        auto bounds = getLocalBounds().reduced(4, 2);
+        board.origin = bounds.getPosition();
+        board.gutter = juce::jlimit(88, 120, bounds.getWidth() / 8);
+        board.colW = juce::jmax(1, (bounds.getWidth() - board.gutter) / numBuses);
+        board.tapTop = bounds.getY();
+        board.tapH = 16;
+        board.nameTop = board.tapTop + tapCount * board.tapH + 6;
+        board.nameH = 34;
+        board.dbTop = board.nameTop + board.nameH;
+        board.labelTop = bounds.getBottom() - 16;
+        board.faderTop = board.dbTop + 18;
+        board.faderBottom = juce::jmax(board.faderTop + 8, board.labelTop - 2);
+        return board;
+    }
+
+    static juce::Colour busPlate(int bus)
+    {
+        static const juce::uint32 colours[] = {
+            0xff1d4e89, 0xff1f6b45, 0xff8a5a12, 0xff0e6e78,
+            0xff8a2f62, 0xff5a3d86, 0xff2f4f6f, 0xff8a3d22,
+            0xff245c8a, 0xff2a7a48, 0xff6e4a28, 0xff14686a,
+            0xff7a3a58, 0xff4a4a8a, 0xff3d5a3a, 0xff6a3030
+        };
+        return juce::Colour(colours[bus % 16]);
+    }
+
+    static juce::String busNumber(int bus)
+    {
+        return juce::String(bus + 1).paddedLeft('0', 2);
+    }
+
+    static float levelY(float unit, const Board& board)
+    {
+        const float span = (float) juce::jmax(1, board.faderBottom - board.faderTop);
+        return (float) board.faderBottom - clamp01(unit) * span;
+    }
+
+    Hit hitTest(juce::Point<int> position) const
+    {
+        const auto board = layout();
+        Hit hit;
+        const int local = position.x - board.origin.getX() - board.gutter;
+
+        if (local < 0)
+            return hit;
+
+        hit.bus = local / board.colW;
+
+        if (hit.bus < 0 || hit.bus >= numBuses)
+        {
+            hit.bus = -1;
+            return hit;
+        }
+
+        if (position.y >= board.tapTop && position.y < board.nameTop)
+        {
+            const int row = (position.y - board.tapTop) / board.tapH;
+
+            if (row >= 0 && row < tapCount)
+                hit.tap = row;
+        }
+        else if (position.y >= board.faderTop && position.y <= board.faderBottom)
+            hit.level = true;
+
+        return hit;
+    }
+
+    void writeLevel(int bus, float y)
+    {
+        const auto board = layout();
+        const float span = (float) juce::jmax(1, board.faderBottom - board.faderTop);
+        const float unit = ((float) board.faderBottom - y) / span;
+        model.setFloat(channelPath(channel, "mix/" + busNumber(bus) + "/level"), clamp01(unit));
+        repaint();
+    }
+
+    ConsoleModel& model;
+    int& channel;
+    int dragBus = -1;
+};
 } // namespace
 
 class ChannelEditor::Surface : public juce::Component
@@ -892,6 +1447,11 @@ public:
         indexLabel.setFont(juce::Font(juce::FontOptions(16.0f)));
         indexLabel.setColour(juce::Label::textColourId, text());
         addAndMakeVisible(indexLabel);
+        channelIcon.onClick = [this]
+        {
+            openChannelIconPicker(channelIcon, model, index, [this] { refresh(); });
+        };
+        addAndMakeVisible(channelIcon);
 
         name.setJustificationType(juce::Justification::centredLeft);
         name.setEditable(false, true, false);
@@ -974,8 +1534,10 @@ public:
         delayOn = addFlag("Delay", "delay/on");
         delayTime = addSlider("Time", "delay/time", [](float value) { return millisecondsText(delaySeconds(value) * 1000.0f); });
 
-        gateOn = addFlag("Gate", "gate/on");
-        gateMode = addChoice("Mode", "gate/mode", juce::StringArray { "Gate", "Exp 2", "Exp 3", "Exp 4", "Duck" });
+        gateOn = addFlag("Active", "gate/on");
+        gateOn->setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xffe07a7a));
+        gateOn->setColour(juce::TextButton::textColourOnId, juce::Colour(0xff1c2128));
+        gateMode = addChoice("Mode", "gate/mode", juce::StringArray { "GATE", "EXP2", "EXP3", "EXP4", "DUCK" });
         gateThr = addSlider("Threshold", "gate/thr", [](float value) { return decibelText(gateThresholdDb(value)); });
         gateRange = addSlider("Range", "gate/range", [](float value) { return decibelText(gateRangeDb(value)); });
         gateAttack = addSlider("Attack", "gate/attack", [](float value) { return millisecondsText(dynamicsMilliseconds(value, 0.1f, 120.0f)); });
@@ -999,23 +1561,25 @@ public:
             row.q = addSlider("Q", prefix + "q", [](float value) { return juce::String(eqQ(value), 2); });
         }
 
-        compOn = addFlag("Comp", "dyn/on");
-        compMode = addChoice("Mode", "dyn/mode", juce::StringArray { "Comp", "Exp" });
-        compDetect = addChoice("Detect", "dyn/det", juce::StringArray { "Peak", "RMS" });
-        compEnvelope = addChoice("Envelope", "dyn/env", juce::StringArray { "Linear", "Log" });
-        compPosition = addChoice("Position", "dyn/pos", juce::StringArray { "Post EQ", "Pre EQ" });
+        compOn = addFlag("Active", "dyn/on");
+        compOn->setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xffe0b040));
+        compOn->setColour(juce::TextButton::textColourOnId, juce::Colour(0xff1c2128));
+        compMode = addChoice("Mode", "dyn/mode", juce::StringArray { "COMP", "EXP" });
+        compDetect = addChoice("Det", "dyn/det", juce::StringArray { "PEAK", "RMS" });
+        compEnvelope = addChoice("Env", "dyn/env", juce::StringArray { "LIN", "LOG" });
+        compPosition = addChoice("Pos", "dyn/pos", juce::StringArray { "POST", "PRE" });
         compAuto = addFlag("Auto", "dyn/auto");
         compFilter = addFlag("Filter", "dyn/filter/on");
         compFilterType = addChoice("Filter", "dyn/filter/type", juce::StringArray { "LC6", "LC12", "HC6", "HC12", "Q 1", "Q 2", "Q 3", "Q 5", "Q 10" });
         compThr = addSlider("Threshold", "dyn/thr", [](float value) { return decibelText(vc::compThresholdDb(value)); });
         compRatio = addSlider("Ratio", "dyn/ratio", [](float value) { return juce::String(vc::compRatio(value), 1) + ":1"; });
         compKnee = addSlider("Knee", "dyn/knee", [](float value) { return decibelText(compKneeDb(value)); });
-        compMakeup = addSlider("Makeup", "dyn/mgain", [](float value) { return decibelText(vc::compMakeupDb(value)); });
+        compMakeup = addSlider("Gain", "dyn/mgain", [](float value) { return decibelText(vc::compMakeupDb(value)); });
         compMix = addSlider("Mix", "dyn/mix", [](float value) { return juce::String(juce::roundToInt(clamp01(value) * 100.0f)) + "%"; });
         compAttack = addSlider("Attack", "dyn/attack", [](float value) { return millisecondsText(dynamicsMilliseconds(value, 0.1f, 120.0f)); });
         compHold = addSlider("Hold", "dyn/hold", [](float value) { return millisecondsText(dynamicsMilliseconds(value, 0.1f, 2000.0f)); });
         compRelease = addSlider("Release", "dyn/release", [](float value) { return millisecondsText(dynamicsMilliseconds(value, 5.0f, 4000.0f)); });
-        compFilterFreq = addSlider("Key freq", "dyn/filter/f", [](float value) { return hertzText(eqFrequencyHz(value)); });
+        compFilterFreq = addSlider("Freq", "dyn/filter/f", [](float value) { return hertzText(eqFrequencyHz(value)); });
 
         auto addBox = [this](ControlBox& box, const juce::String& title, juce::Colour colour)
         {
@@ -1027,6 +1591,7 @@ public:
         addBox(configBox, "Config", juce::Colour(0xffd7dbe2));
         addBox(delayBox, "Delay", juce::Colour(0xffe0b040));
         addBox(gateBox, "Gate", juce::Colour(0xffe07a7a));
+        addBox(dynBox, "Dynamics", juce::Colour(0xffe0b040));
         addBox(hpfBox, "HPF", juce::Colour(0xfff2f5f8));
 
         for (int band = 0; band < numChannelEqBands; ++band)
@@ -1036,13 +1601,16 @@ public:
         {
             const auto number = juce::String(bus + 1).paddedLeft('0', 2);
             sendLevel[bus] = addSlider("Level", "mix/" + number + "/level", [](float value) { return decibelText(faderToDb(value)); });
-            sendPre[bus] = addFlag("Pre", "mix/" + number + "/tap");
+            sendLevel[bus]->setVerticalBar(true);
+            sendTap[bus] = addChoice("Tap", "mix/" + number + "/tap", juce::StringArray { "Post", "Pre", "Pre EQ", "Post EQ", "Sub" });
             addBox(sendBox[bus], "Bus " + juce::String(bus + 1), juce::Colour(0xff7eb6d6));
         }
 
         addAndMakeVisible(eqGraph);
         addAndMakeVisible(gateGraph);
         addAndMakeVisible(compGraph);
+        sendsBoard = std::make_unique<SendsBoard>(model, index);
+        addAndMakeVisible(*sendsBoard);
         show(Page::channel);
         refresh();
     }
@@ -1067,6 +1635,12 @@ public:
     void refresh()
     {
         indexLabel.setText(juce::String(index + 1).paddedLeft('0', 2), juce::dontSendNotification);
+        int icon = -1;
+        model.getInt(channelPath(index, "config/icon"), icon);
+        channelIcon.setIcon(icon);
+
+        if (sendsBoard != nullptr)
+            sendsBoard->repaint();
 
         if (! name.isBeingEdited())
             name.setText(model.getChannelName(index), juce::dontSendNotification);
@@ -1081,6 +1655,8 @@ public:
             readout += "  ·  no source";
 
         sourceReadout.setText(readout, juce::dontSendNotification);
+        const bool auxInput = route >= numLocalInputs && route < numRoutableInputs;
+        trim->setTitle(auxInput ? "Trim" : "Gain");
 
         if (! sourceBox.isPopupActive())
             sourceBox.setSelectedId(route < 0 ? 1 : route + 2, juce::dontSendNotification);
@@ -1133,6 +1709,7 @@ public:
         nextButton.setBounds(head.removeFromLeft(32));
         head.removeFromLeft(8);
         indexLabel.setBounds(head.removeFromLeft(36));
+        channelIcon.setBounds(head.removeFromLeft(32).reduced(1, 1));
         name.setBounds(head.removeFromLeft(juce::jmin(220, head.getWidth() / 3)));
         sourceReadout.setBounds(head.removeFromLeft(juce::jmin(220, head.getWidth() / 2)).reduced(8, 0));
         pasteButton.setBounds(head.removeFromRight(72));
@@ -1164,31 +1741,42 @@ public:
 
         if (page == Page::channel)
         {
-            const int preampW = juce::jmin(250, body.getWidth() / 4);
-            const int delayW = juce::jmin(230, body.getWidth() / 4);
-            auto preampArea = body.removeFromLeft(preampW).reduced(3);
-            auto delayArea = body.removeFromRight(delayW).reduced(3);
-            auto configArea = body.reduced(3);
+            auto row = body.removeFromTop(juce::jmin(136, body.getHeight()));
+            const int preampW = juce::jmin(210, juce::jmax(150, row.getWidth() / 5));
+            const int delayW = juce::jmin(200, juce::jmax(150, row.getWidth() / 5));
+            auto preampArea = row.removeFromLeft(preampW).reduced(3);
+            auto delayArea = row.removeFromRight(delayW).reduced(3);
+            auto configArea = row.reduced(3);
             preampBox.setBounds(preampArea);
             configBox.setBounds(configArea);
             delayBox.setBounds(delayArea);
-            preampArea = preampArea.reduced(8, 6);
-            preampArea.removeFromTop(16);
-            configArea = configArea.reduced(8, 6);
-            configArea.removeFromTop(16);
-            delayArea = delayArea.reduced(8, 6);
-            delayArea.removeFromTop(16);
-            takeKnob(preampArea, trim);
-            takeButton(preampArea, polarity, 88, 28);
-            sourceLabel.setBounds(configArea.removeFromTop(16));
-            auto configLine = configArea.removeFromTop(30);
-            sourceBox.setBounds(configLine.removeFromLeft(juce::jmin(220, juce::jmax(80, configLine.getWidth() - 84))));
-            auto assignLine = configArea.removeFromTop(30);
-            takeButton(assignLine, mainAssign, 76, 28);
-            takeButton(assignLine, monoAssign, 76, 28);
-            takeKnob(configArea, monoLevel);
-            takeButton(delayArea, delayOn, 76, 28);
-            takeKnob(delayArea, delayTime);
+
+            auto placeKnobAndButton = [&](juce::Rectangle<int> inner, UnitSlider* knob, juce::Component* button)
+            {
+                inner.removeFromTop(16);
+
+                if (knob != nullptr)
+                    knob->setBounds(inner.removeFromLeft(juce::jmin(104, juce::jmax(72, inner.getWidth() / 2))).reduced(2, 0));
+
+                if (button != nullptr)
+                    button->setBounds(inner.withSizeKeepingCentre(juce::jmin(84, inner.getWidth()), 28));
+            };
+
+            placeKnobAndButton(preampArea.reduced(8, 6), trim, polarity);
+
+            auto configInner = configArea.reduced(8, 6);
+            configInner.removeFromTop(16);
+            auto levelColumn = configInner.removeFromRight(juce::jmin(100, juce::jmax(72, configInner.getWidth() / 4)));
+
+            if (monoLevel != nullptr)
+                monoLevel->setBounds(levelColumn.reduced(2, 0));
+
+            sourceLabel.setBounds(configInner.removeFromTop(16));
+            sourceBox.setBounds(configInner.removeFromTop(26).reduced(0, 1));
+            auto assign = configInner.removeFromTop(32);
+            takeButton(assign, mainAssign, 76, 28);
+            takeButton(assign, monoAssign, 76, 28);
+            placeKnobAndButton(delayArea.reduced(8, 6), delayTime, delayOn);
         }
         else if (page == Page::eq)
         {
@@ -1222,81 +1810,50 @@ public:
         }
         else if (page == Page::dyn)
         {
-            auto gateRow = body.removeFromTop(body.getHeight() / 2);
-            body.removeFromTop(4);
-            auto placeDynamics = [&](juce::Rectangle<int> row, DynamicsGraph& graph, juce::Component* button, ChoiceBox* mode)
+            auto left = body.removeFromLeft(body.getWidth() / 2).reduced(3);
+            auto right = body.reduced(3);
+            gateBox.setBounds(left);
+            dynBox.setBounds(right);
+
+            auto stack = [](juce::Rectangle<int> column, std::initializer_list<juce::Component*> items)
             {
-                auto controls = row.removeFromRight(juce::jmax(280, row.getWidth() / 2));
-                graph.setBounds(row.reduced(2));
-                auto buttons = controls.removeFromTop(42);
-                takeButton(buttons, button, 64, 26);
+                const int count = (int) items.size();
 
-                if (mode != nullptr)
-                    mode->setBounds(buttons.removeFromLeft(110).reduced(2, 0));
+                if (count <= 0 || column.getHeight() <= 0)
+                    return;
 
-                return controls;
+                const int row = juce::jmax(1, column.getHeight() / count);
+
+                for (auto* item : items)
+                    if (item != nullptr)
+                        item->setBounds(column.removeFromTop(row).reduced(2, 1));
             };
 
-            auto gateControls = placeDynamics(gateRow, gateGraph, gateOn, gateMode);
-            const int gateKnob = juce::jmax(64, gateControls.getWidth() / 5);
-            takeKnob(gateControls, gateThr);
-            juce::ignoreUnused(gateKnob);
-            takeKnob(gateControls, gateRange);
-            takeKnob(gateControls, gateAttack);
-            takeKnob(gateControls, gateHold);
-            takeKnob(gateControls, gateRelease);
+            auto gateInner = left.reduced(8, 6);
+            gateInner.removeFromTop(16);
+            auto gateControls = gateInner.removeFromRight(juce::jmin(210, juce::jmax(168, gateInner.getWidth() / 3)));
+            gateGraph.setBounds(gateInner.reduced(2, 0));
+            stack(gateControls, { gateOn, gateMode, gateThr, gateRange, gateAttack, gateHold, gateRelease });
 
-            auto compButtons = body.removeFromTop(42);
-            takeButton(compButtons, compOn, 64, 26);
-            auto choiceWidth = juce::jmax(78, compButtons.getWidth() / 7);
-            auto takeChoice = [&](ChoiceBox* choice)
-            {
-                if (choice != nullptr)
-                    choice->setBounds(compButtons.removeFromLeft(choiceWidth).reduced(2, 0));
-            };
-            takeChoice(compMode);
-            takeChoice(compDetect);
-            takeChoice(compEnvelope);
-            takeChoice(compPosition);
-            takeButton(compButtons, compAuto, 64, 26);
-            takeButton(compButtons, compFilter, 64, 26);
-            takeChoice(compFilterType);
-            compGraph.setBounds(body.removeFromLeft(juce::jmax(220, body.getWidth() / 3)).reduced(2));
-            const int compKnob = juce::jmax(58, body.getWidth() / 9);
-            auto compTop = body.removeFromTop(body.getHeight() / 2);
-            auto takeComp = [&](juce::Rectangle<int>& row, UnitSlider* slider)
-            {
-                if (slider != nullptr)
-                    slider->setBounds(row.removeFromLeft(compKnob).reduced(1, 0));
-            };
-            takeComp(compTop, compThr);
-            takeComp(compTop, compRatio);
-            takeComp(compTop, compKnee);
-            takeComp(compTop, compMakeup);
-            takeComp(compTop, compMix);
-            takeComp(compTop, compAttack);
-            takeComp(compTop, compHold);
-            takeComp(compTop, compRelease);
-            takeComp(body, compFilterFreq);
+            auto compInner = right.reduced(8, 6);
+            compInner.removeFromTop(16);
+            auto compControls = compInner.removeFromRight(juce::jmin(220, juce::jmax(176, compInner.getWidth() / 3)));
+            auto menuRow = compInner.removeFromBottom(36);
+            compGraph.setBounds(compInner.reduced(2, 2));
+            const int menuWidth = juce::jmax(1, menuRow.getWidth() / 4);
+
+            for (auto* menu : { compMode, compDetect, compEnvelope, compPosition })
+                if (menu != nullptr)
+                    menu->setBounds(menuRow.removeFromLeft(menuWidth).reduced(2, 2));
+
+            stack(compControls, { compOn, compAuto, compFilter, compFilterType, compFilterFreq,
+                                  compThr, compRatio, compKnee, compMakeup, compMix,
+                                  compAttack, compHold, compRelease });
         }
         else if (page == Page::sends)
         {
-            const int columns = 8;
-            const int rows = 2;
-            const int cellW = body.getWidth() / columns;
-            const int cellH = juce::jmax(96, body.getHeight() / rows);
-
-            for (int bus = 0; bus < numBuses; ++bus)
-            {
-                const int column = bus % columns;
-                const int row = bus / columns;
-                auto cell = juce::Rectangle<int>(body.getX() + column * cellW, body.getY() + row * cellH, cellW, cellH).reduced(3);
-                sendBox[bus].setBounds(cell);
-                cell = cell.reduced(6, 4);
-                cell.removeFromTop(16);
-                sendPre[bus]->setBounds(cell.removeFromRight(52).removeFromTop(26));
-                sendLevel[bus]->setBounds(cell);
-            }
+            if (sendsBoard != nullptr)
+                sendsBoard->setBounds(body);
         }
     }
 
@@ -1324,7 +1881,8 @@ private:
         preampBox.setVisible(channel);
         configBox.setVisible(channel);
         delayBox.setVisible(channel);
-        gateBox.setVisible(false);
+        gateBox.setVisible(dyn);
+        dynBox.setVisible(dyn);
         hpfOn->setVisible(equaliser);
         eqOn->setVisible(equaliser);
         hpfFreq->setVisible(equaliser);
@@ -1376,10 +1934,13 @@ private:
 
         for (int bus = 0; bus < numBuses; ++bus)
         {
-            sendBox[bus].setVisible(sends);
-            sendLevel[bus]->setVisible(sends);
-            sendPre[bus]->setVisible(sends);
+            sendBox[bus].setVisible(false);
+            sendLevel[bus]->setVisible(false);
+            sendTap[bus]->setVisible(false);
         }
+
+        if (sendsBoard != nullptr)
+            sendsBoard->setVisible(sends);
 
         styleTabs();
         resized();
@@ -1422,6 +1983,8 @@ private:
     juce::TextButton linkButton { "Link" };
     juce::TextButton copyButton { "Copy" };
     juce::TextButton pasteButton { "Paste" };
+    ChannelIconButton channelIcon;
+    std::unique_ptr<SendsBoard> sendsBoard;
     juce::TextButton homeTab { "Channel" };
     juce::TextButton eqTab { "EQ" };
     juce::TextButton dynTab { "Dyn" };
@@ -1468,11 +2031,12 @@ private:
     ControlBox configBox;
     ControlBox delayBox;
     ControlBox gateBox;
+    ControlBox dynBox;
     ControlBox hpfBox;
     ControlBox bandBox[numChannelEqBands];
     ControlBox sendBox[numBuses];
     UnitSlider* sendLevel[numBuses] {};
-    FlagButton* sendPre[numBuses] {};
+    ChoiceBox* sendTap[numBuses] {};
     EqGraph eqGraph;
     DynamicsGraph gateGraph;
     DynamicsGraph compGraph;

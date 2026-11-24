@@ -71,6 +71,7 @@ public:
 
     juce::String getChannelName(int index) const;
     void setChannelName(int index, const juce::String& name);
+    juce::String getBusName(int index) const;
 
     bool isChannelLinked(int channelIndex) const noexcept;
     void setChannelLinked(int channelIndex, bool linked);

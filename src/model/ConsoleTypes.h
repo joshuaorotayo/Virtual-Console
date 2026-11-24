@@ -107,6 +107,7 @@ struct Channel : MixPoint
     int dcaMask = 0;
     int muteMask = 0;
     int color = 0;
+    int icon = -1;
 };
 
 struct FxSlot

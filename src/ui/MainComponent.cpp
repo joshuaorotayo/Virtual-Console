@@ -667,6 +667,59 @@ private:
     std::function<void (int)> onRemove;
 };
 
+TransportButton::TransportButton(Icon iconToDraw)
+    : juce::Button({}),
+      icon(iconToDraw)
+{
+}
+
+void TransportButton::setPlaying(bool shouldPlay)
+{
+    if (playing == shouldPlay)
+        return;
+
+    playing = shouldPlay;
+    repaint();
+}
+
+void TransportButton::paintButton(juce::Graphics& g, bool highlighted, bool down)
+{
+    auto bounds = getLocalBounds().toFloat().reduced(1.0f);
+    auto fill = icon == Icon::play && playing ? juce::Colour(0xff3d8f5a) : juce::Colour(0xff2e343d);
+
+    if (down)
+        fill = fill.brighter(0.08f);
+    else if (highlighted)
+        fill = fill.brighter(0.15f);
+
+    g.setColour(fill);
+    g.fillRoundedRectangle(bounds, 4.0f);
+
+    const float cx = bounds.getCentreX();
+    const float cy = bounds.getCentreY();
+    g.setColour(juce::Colours::white);
+
+    if (icon == Icon::play && playing)
+    {
+        g.fillRoundedRectangle(cx - 6.5f, cy - 7.0f, 4.0f, 14.0f, 1.0f);
+        g.fillRoundedRectangle(cx + 2.5f, cy - 7.0f, 4.0f, 14.0f, 1.0f);
+        return;
+    }
+
+    if (icon == Icon::restart)
+    {
+        g.fillRoundedRectangle(cx - 9.0f, cy - 7.0f, 2.5f, 14.0f, 0.6f);
+        juce::Path triangle;
+        triangle.addTriangle(cx - 4.0f, cy - 7.0f, cx - 4.0f, cy + 7.0f, cx + 8.0f, cy);
+        g.fillPath(triangle);
+        return;
+    }
+
+    juce::Path triangle;
+    triangle.addTriangle(cx - 5.0f, cy - 8.0f, cx - 5.0f, cy + 8.0f, cx + 8.0f, cy);
+    g.fillPath(triangle);
+}
+
 MainComponent::MainComponent()
     : engine (model)
 {
@@ -783,8 +836,6 @@ MainComponent::MainComponent()
     addButton.onClick = [this] { chooseAudio(); };
     addAndMakeVisible (addButton);
 
-    playButton.setClickingTogglesState (false);
-    playButton.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xff3d8f5a));
     playButton.onClick = [this]
     {
         if (engine.isPlaying())
@@ -947,9 +998,9 @@ void MainComponent::resized()
     mixLabel.setBounds (top.removeFromRight (36));
 
     auto transport = area.removeFromTop (36).reduced (10, 4);
-    playButton.setBounds (transport.removeFromLeft (78));
+    playButton.setBounds (transport.removeFromLeft (36));
     transport.removeFromLeft (6);
-    restartButton.setBounds (transport.removeFromLeft (88));
+    restartButton.setBounds (transport.removeFromLeft (36));
     transport.removeFromLeft (10);
     timeLabel.setBounds (transport.removeFromRight (118));
     timeline.setBounds (transport.reduced (0, 2));
@@ -1051,13 +1102,7 @@ void MainComponent::timerCallback()
 
 void MainComponent::syncTransport()
 {
-    const bool playing = engine.isPlaying();
-    const juce::String label = playing ? "Pause" : "Play";
-
-    if (playButton.getButtonText() != label)
-        playButton.setButtonText (label);
-
-    playButton.setToggleState (playing, juce::dontSendNotification);
+    playButton.setPlaying (engine.isPlaying());
 
     const double duration = engine.getDuration();
     const double position = engine.getPosition();

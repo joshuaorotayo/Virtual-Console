@@ -3,6 +3,7 @@
 #include "model/ConsoleModel.h"
 #include "model/FaderLaw.h"
 #include "engine/MixEngine.h"
+#include "ui/ChannelIcons.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
@@ -54,6 +55,7 @@ private:
     bool selected = false;
 
     juce::TextButton scribble;
+    ChannelIconButton icon;
     juce::Slider pan;
     MeterView meter;
     ConsoleFader fader;

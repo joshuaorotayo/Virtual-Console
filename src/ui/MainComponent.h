@@ -14,6 +14,21 @@ class BusBank;
 class MatrixBank;
 class MatrixSendPanel;
 
+class TransportButton : public juce::Button
+{
+public:
+    enum class Icon { play, restart };
+
+    explicit TransportButton(Icon iconToDraw);
+
+    void setPlaying(bool shouldPlay);
+    void paintButton(juce::Graphics& g, bool highlighted, bool down) override;
+
+private:
+    Icon icon;
+    bool playing = false;
+};
+
 class MainComponent : public juce::Component,
                       private juce::Timer
 {
@@ -64,8 +79,8 @@ private:
     juce::Label listenLabel { {}, "Listen" };
     juce::ComboBox listenBox;
     juce::TextButton addButton { "Add audio" };
-    juce::TextButton playButton { "Play" };
-    juce::TextButton restartButton { "Restart" };
+    TransportButton playButton { TransportButton::Icon::play };
+    TransportButton restartButton { TransportButton::Icon::restart };
     juce::Slider timeline;
     juce::Label timeLabel { {}, "0:00 / 0:00" };
     juce::Label sourceHeading { {}, "Sources" };

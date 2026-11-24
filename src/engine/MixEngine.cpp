@@ -27,6 +27,9 @@ void MixEngine::ensureCapacity(int samples)
     mainBufR.assign((size_t) scratchCapacity, 0.0f);
     soloBufL.assign((size_t) scratchCapacity, 0.0f);
     soloBufR.assign((size_t) scratchCapacity, 0.0f);
+
+    for (auto& strip : channelDsp)
+        strip.ensureCapacity(scratchCapacity);
 }
 
 void MixEngine::prepareToPlay(int samplesPerBlockExpected, double newSampleRate)
@@ -428,7 +431,7 @@ void MixEngine::processChunk(float* left, float* right, int numSamples, juce::in
     std::array<float, numChannels> postTarget {};
     std::array<float, numChannels> monoTarget {};
     std::array<std::array<float, numBuses>, numChannels> sendTarget {};
-    std::array<std::array<char, numBuses>, numChannels> sendIsPre {};
+    std::array<std::array<char, numBuses>, numChannels> sendTap {};
     std::array<float, numBuses> busTargetL {};
     std::array<float, numBuses> busTargetR {};
     std::array<float, numBuses> busPostTarget {};
@@ -454,7 +457,7 @@ void MixEngine::processChunk(float* left, float* right, int numSamples, juce::in
         for (int bus = 0; bus < numBuses; ++bus)
         {
             sendTarget[(size_t) channel][(size_t) bus] = faderToGain(strip.sendLevel[bus].load(std::memory_order_relaxed));
-            sendIsPre[(size_t) channel][(size_t) bus] = strip.sendPre[bus].load(std::memory_order_relaxed) != 0 ? 1 : 0;
+            sendTap[(size_t) channel][(size_t) bus] = (char) std::clamp(strip.sendPre[bus].load(std::memory_order_relaxed), 0, 4);
         }
     }
 
@@ -547,19 +550,27 @@ void MixEngine::processChunk(float* left, float* right, int numSamples, juce::in
                 const float target = sendTarget[(size_t) channel][(size_t) bus];
                 gain += (target - gain) * smoothCoeff;
 
-                if (gain <= 1.0e-6f)
+                const int tap = sendTap[(size_t) channel][(size_t) bus];
+                const bool subgroup = tap == 4;
+
+                if (! subgroup && gain <= 1.0e-6f)
                     continue;
 
-                if (sendIsPre[(size_t) channel][(size_t) bus] != 0)
+                const float send = subgroup ? 1.0f : gain;
+                const float mute = audible[(size_t) channel] != 0 ? 1.0f : 0.0f;
+
+                if (tap == 1 || tap == 2 || tap == 3)
                 {
-                    const float mute = audible[(size_t) channel] != 0 ? 1.0f : 0.0f;
-                    busSumL[(size_t) bus] += input * state.curPflL * mute * gain;
-                    busSumR[(size_t) bus] += input * state.curPflR * mute * gain;
+                    const float tapped = tap == 2 ? channelDsp[(size_t) channel].preEqSample(sample)
+                                       : tap == 3 ? channelDsp[(size_t) channel].postEqSample(sample)
+                                                  : input;
+                    busSumL[(size_t) bus] += tapped * state.curPflL * mute * send;
+                    busSumR[(size_t) bus] += tapped * state.curPflR * mute * send;
                 }
                 else
                 {
-                    busSumL[(size_t) bus] += leftSample * gain;
-                    busSumR[(size_t) bus] += rightSample * gain;
+                    busSumL[(size_t) bus] += leftSample * send;
+                    busSumR[(size_t) bus] += rightSample * send;
                 }
             }
         }

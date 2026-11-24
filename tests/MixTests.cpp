@@ -409,6 +409,13 @@ public:
             block = renderBlock (engine, 32);
             expectWithinAbsoluteError (block.left[8], 1.0f, 0.02f);
             expectWithinAbsoluteError (block.right[8], 0.0f, 0.02f);
+
+            expect (model.setFloat ("/ch/01/mix/fader", 0.75f));
+            expect (model.setFloat ("/ch/01/mix/01/level", 0.0f));
+            expect (model.setInt ("/ch/01/mix/01/tap", 4));
+            engine.snapSmoothers();
+            block = renderBlock (engine, 32);
+            expectWithinAbsoluteError (block.left[8], 1.0f, 0.02f, "subgroup send stays at unity");
         }
     }
 };
