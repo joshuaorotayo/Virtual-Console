@@ -1010,6 +1010,13 @@ public:
         scribble.setColour(juce::TextButton::textColourOffId, text());
         scribble.setInterceptsMouseClicks(false, false);
         addAndMakeVisible(scribble);
+        colourIcon.setTooltip("Double-click to choose this colour");
+        colourIcon.onClick = [this] { if (onSelect != nullptr) onSelect(); };
+        colourIcon.onDoubleClick = [this]
+        {
+            openStripColourPicker(colourIcon, model, root + "/config/color", [this] { refresh(); });
+        };
+        addAndMakeVisible(colourIcon);
 
         fader.setSliderStyle(juce::Slider::LinearVertical);
         fader.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 46, 16);
@@ -1052,6 +1059,11 @@ public:
             model.getInt(root + "/mix/on", enabled);
             mute.setToggleState(enabled == 0, juce::dontSendNotification);
         }
+
+        int colour = 6;
+        model.getInt(root + "/config/color", colour);
+        colourIcon.setStored(colour);
+        scribble.setColour(juce::TextButton::textColourOffId, stripNameColour(colour));
     }
 
     void setSelected(bool shouldSelect)
@@ -1072,12 +1084,14 @@ public:
         auto bounds = getLocalBounds().reduced(3).toFloat();
         g.setColour(juce::Colour(0xff2a313a));
         g.fillRoundedRectangle(bounds, 6.0f);
-        g.setColour(juce::Colour(0xff7af4f8));
+        int colour = 6;
+        model.getInt(root + "/config/color", colour);
+        g.setColour(stripColourFrom(colour));
         g.fillRoundedRectangle(8.0f, 8.0f, (float) getWidth() - 16.0f, 4.0f, 2.0f);
 
         if (selected)
         {
-            g.setColour(juce::Colour(0xff7af4f8));
+            g.setColour(stripColourFrom(colour));
             g.drawRoundedRectangle(bounds, 6.0f, 2.0f);
         }
     }
@@ -1086,7 +1100,9 @@ public:
     {
         auto area = getLocalBounds().reduced(5);
         area.removeFromTop(12);
-        scribble.setBounds(area.removeFromTop(28).reduced(2, 0));
+        auto nameRow = area.removeFromTop(28);
+        colourIcon.setBounds(nameRow.removeFromLeft(28).reduced(1, 1));
+        scribble.setBounds(nameRow.reduced(2, 0));
         mute.setBounds(area.removeFromBottom(26).reduced(18, 0));
         area.removeFromBottom(2);
         scale.setBounds(area.removeFromLeft(36));
@@ -1100,6 +1116,7 @@ private:
     juce::String root;
     bool selected = false;
     juce::TextButton scribble;
+    ColourIcon colourIcon;
     ConsoleFader fader;
     FaderScale scale;
     juce::TextButton mute { "M" };

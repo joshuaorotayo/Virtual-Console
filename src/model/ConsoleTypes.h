@@ -74,6 +74,11 @@ struct MixPoint
     Dynamics comp {};
 };
 
+struct ReturnStrip : MixPoint
+{
+    int color = 6;
+};
+
 struct Bus : MixPoint
 {
     std::atomic<int> toMain { 0 };

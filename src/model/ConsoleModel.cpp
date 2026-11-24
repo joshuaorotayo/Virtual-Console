@@ -500,10 +500,19 @@ ConsoleModel::ConsoleModel()
     }
 
     for (int i = 0; i < numFxReturns; ++i)
+    {
         fxReturnNames[i] = "Fx " + juce::String(i + 1);
+        fxReturns[(size_t) i].color = 6;
+    }
 
     for (int i = 0; i < numAuxIns; ++i)
+    {
         auxNames[i] = "Aux " + juce::String(i + 1);
+        auxIns[(size_t) i].color = 6;
+    }
+
+    for (auto& strip : usbReturns)
+        strip.color = 6;
 
     for (int i = 0; i < numDcas; ++i)
         dcaNames[i] = "DCA " + juce::String(i + 1);
@@ -1464,6 +1473,13 @@ bool ConsoleModel::assignInt(const juce::String& path, int value)
         auto& strip = tokens[0] == "auxin" ? auxIns[(size_t) index]
                     : tokens[0] == "fxrtn" ? fxReturns[(size_t) index]
                                            : usbReturns[(size_t) index];
+
+        if (tokens.size() >= 4 && tokens[2] == "config" && tokens[3] == "color")
+        {
+            strip.color = std::clamp(value, 0, 15);
+            return true;
+        }
+
         return setMixOn(strip, tokens, 2, value);
     }
 
@@ -1849,6 +1865,13 @@ bool ConsoleModel::getInt(const juce::String& path, int& value) const
         const auto& strip = tokens[0] == "auxin" ? auxIns[(size_t) index]
                           : tokens[0] == "fxrtn" ? fxReturns[(size_t) index]
                                                  : usbReturns[(size_t) index];
+
+        if (tokens.size() >= 4 && tokens[2] == "config" && tokens[3] == "color")
+        {
+            value = strip.color;
+            return true;
+        }
+
         return getMixOn(strip, tokens, 2, value);
     }
 

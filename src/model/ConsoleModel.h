@@ -95,9 +95,9 @@ private:
     std::array<Channel, numChannels> channels;
     std::array<Bus, numBuses> buses;
     std::array<Matrix, numMatrices> matrices;
-    std::array<MixPoint, numFxReturns> fxReturns;
-    std::array<MixPoint, numAuxIns> auxIns;
-    std::array<MixPoint, numUsbReturns> usbReturns;
+    std::array<ReturnStrip, numFxReturns> fxReturns;
+    std::array<ReturnStrip, numAuxIns> auxIns;
+    std::array<ReturnStrip, numUsbReturns> usbReturns;
     std::array<MixPoint, numDcas> dcas;
     std::array<std::atomic<int>, numDcas> dcaSolo {};
     MixPoint mainSt;
