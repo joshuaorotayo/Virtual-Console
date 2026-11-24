@@ -40,6 +40,12 @@ public:
     const MixPoint& mainCenter() const noexcept { return mainMono; }
     Bus& bus(int index) noexcept { return buses[(size_t) index]; }
     const Bus& bus(int index) const noexcept { return buses[(size_t) index]; }
+    MixPoint& dca(int index) noexcept { return dcas[(size_t) index]; }
+    const MixPoint& dca(int index) const noexcept { return dcas[(size_t) index]; }
+    std::atomic<int>& dcaSoloState(int index) noexcept { return dcaSolo[(size_t) index]; }
+    const std::atomic<int>& dcaSoloState(int index) const noexcept { return dcaSolo[(size_t) index]; }
+    std::atomic<int>& muteGroupState(int index) noexcept { return muteGroups[(size_t) index]; }
+    const std::atomic<int>& muteGroupState(int index) const noexcept { return muteGroups[(size_t) index]; }
     Matrix& matrix(int index) noexcept { return matrices[(size_t) index]; }
     const Matrix& matrix(int index) const noexcept { return matrices[(size_t) index]; }
     std::atomic<float>& mainMatrixLevel(bool monoBus, int matrix) noexcept;
@@ -74,6 +80,7 @@ public:
     juce::String getChannelName(int index) const;
     void setChannelName(int index, const juce::String& name);
     juce::String getBusName(int index) const;
+    void setBusName(int index, const juce::String& name);
 
     bool isChannelLinked(int channelIndex) const noexcept;
     void setChannelLinked(int channelIndex, bool linked);
@@ -90,7 +97,9 @@ private:
     std::array<Matrix, numMatrices> matrices;
     std::array<MixPoint, numFxReturns> fxReturns;
     std::array<MixPoint, numAuxIns> auxIns;
+    std::array<MixPoint, numUsbReturns> usbReturns;
     std::array<MixPoint, numDcas> dcas;
+    std::array<std::atomic<int>, numDcas> dcaSolo {};
     MixPoint mainSt;
     MixPoint mainMono;
     std::atomic<float> mainStereoMatrix[numMatrices] {};
@@ -116,6 +125,7 @@ private:
         float hpf = 0.2f;
         float delayTime = 0.0f;
         int invert = 0;
+        int phantom = 0;
         int on = 1;
         int mainAssign = 1;
         int monoAssign = 0;

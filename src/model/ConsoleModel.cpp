@@ -32,6 +32,64 @@ int indexOf(const juce::String& text, int count)
     return value - 1;
 }
 
+bool writeMaskBit(std::atomic<int>& mask, int bit, int width, int value)
+{
+    if (bit < 0 || bit >= width)
+        return false;
+
+    const int flag = 1 << bit;
+    int bits = mask.load(std::memory_order_relaxed);
+
+    if (value != 0)
+        bits |= flag;
+    else
+        bits &= ~flag;
+
+    mask.store(bits, std::memory_order_relaxed);
+    return true;
+}
+
+bool readMaskBit(const std::atomic<int>& mask, int bit, int width, int& value)
+{
+    if (bit < 0 || bit >= width)
+        return false;
+
+    value = (mask.load(std::memory_order_relaxed) & (1 << bit)) != 0 ? 1 : 0;
+    return true;
+}
+
+bool writeGroup(std::atomic<int>& dcaMask, std::atomic<int>& muteMask, const juce::StringArray& tokens, int index, int value)
+{
+    if (index + 2 >= tokens.size() || tokens[index] != "grp")
+        return false;
+
+    const int bit = indexOf(tokens[index + 2], tokens[index + 1] == "dca" ? numDcas : numMuteGroups);
+
+    if (tokens[index + 1] == "dca")
+        return writeMaskBit(dcaMask, bit, numDcas, value);
+
+    if (tokens[index + 1] == "mute")
+        return writeMaskBit(muteMask, bit, numMuteGroups, value);
+
+    return false;
+}
+
+bool readGroup(const std::atomic<int>& dcaMask, const std::atomic<int>& muteMask, const juce::StringArray& tokens, int index, int& value)
+{
+    if (index + 2 >= tokens.size() || tokens[index] != "grp")
+        return false;
+
+    const int bit = indexOf(tokens[index + 2], tokens[index + 1] == "dca" ? numDcas : numMuteGroups);
+
+    if (tokens[index + 1] == "dca")
+        return readMaskBit(dcaMask, bit, numDcas, value);
+
+    if (tokens[index + 1] == "mute")
+        return readMaskBit(muteMask, bit, numMuteGroups, value);
+
+    return false;
+}
+
 float clampUnit(float value)
 {
     return std::clamp(value, 0.0f, 1.0f);
@@ -417,6 +475,7 @@ ConsoleModel::ConsoleModel()
     {
         channelNames[i] = "Ch " + juce::String(i + 1);
         channels[(size_t) i].source.store(i, std::memory_order_relaxed);
+        channels[(size_t) i].color = 6;
 
         for (int band = 0; band < numChannelEqBands; ++band)
         {
@@ -429,10 +488,16 @@ ConsoleModel::ConsoleModel()
         patch.store(-1, std::memory_order_relaxed);
 
     for (int i = 0; i < numBuses; ++i)
+    {
         busNames[i] = "Bus " + juce::String(i + 1);
+        buses[(size_t) i].color = i;
+    }
 
     for (int i = 0; i < numMatrices; ++i)
+    {
         matrixNames[i] = "Mtx " + juce::String(i + 1);
+        matrices[(size_t) i].color = i % 8;
+    }
 
     for (int i = 0; i < numFxReturns; ++i)
         fxReturnNames[i] = "Fx " + juce::String(i + 1);
@@ -666,6 +731,14 @@ juce::String ConsoleModel::getBusName(int index) const
     return busNames[index];
 }
 
+void ConsoleModel::setBusName(int index, const juce::String& name)
+{
+    if (index < 0 || index >= numBuses)
+        return;
+
+    busNames[index] = name.substring(0, 12);
+}
+
 bool ConsoleModel::setFloat(const juce::String& path, float value)
 {
     const bool changed = assignFloat(path, value);
@@ -771,7 +844,14 @@ bool ConsoleModel::assignFloat(const juce::String& path, float value)
     if (tokens[0] == "mtx")
     {
         const int index = indexOf(tokens[1], numMatrices);
-        return index >= 0 && setMixFloat(matrices[(size_t) index], tokens, 2, value, numEqBands);
+
+        if (index < 0)
+            return false;
+
+        if (tokens.size() >= 4 && tokens[2] == "gate")
+            return setDynamicsFloat(matrices[(size_t) index].gate, tokens[3], value);
+
+        return setMixFloat(matrices[(size_t) index], tokens, 2, value, numEqBands);
     }
 
     if (tokens[0] == "fxrtn")
@@ -784,6 +864,12 @@ bool ConsoleModel::assignFloat(const juce::String& path, float value)
     {
         const int index = indexOf(tokens[1], numAuxIns);
         return index >= 0 && setMixFloat(auxIns[(size_t) index], tokens, 2, value, numChannelEqBands);
+    }
+
+    if (tokens[0] == "usb")
+    {
+        const int index = indexOf(tokens[1], numUsbReturns);
+        return index >= 0 && setMixFloat(usbReturns[(size_t) index], tokens, 2, value, numChannelEqBands);
     }
 
     if (tokens[0] == "dca")
@@ -929,7 +1015,14 @@ bool ConsoleModel::getFloat(const juce::String& path, float& value) const
     if (tokens[0] == "mtx")
     {
         const int index = indexOf(tokens[1], numMatrices);
-        return index >= 0 && getMixFloat(matrices[(size_t) index], tokens, 2, value, numEqBands);
+
+        if (index < 0)
+            return false;
+
+        if (tokens.size() >= 4 && tokens[2] == "gate")
+            return getDynamicsFloat(matrices[(size_t) index].gate, tokens[3], value);
+
+        return getMixFloat(matrices[(size_t) index], tokens, 2, value, numEqBands);
     }
 
     if (tokens[0] == "fxrtn")
@@ -942,6 +1035,12 @@ bool ConsoleModel::getFloat(const juce::String& path, float& value) const
     {
         const int index = indexOf(tokens[1], numAuxIns);
         return index >= 0 && getMixFloat(auxIns[(size_t) index], tokens, 2, value, numChannelEqBands);
+    }
+
+    if (tokens[0] == "usb")
+    {
+        const int index = indexOf(tokens[1], numUsbReturns);
+        return index >= 0 && getMixFloat(usbReturns[(size_t) index], tokens, 2, value, numChannelEqBands);
     }
 
     if (tokens[0] == "dca")
@@ -1079,9 +1178,18 @@ bool ConsoleModel::assignInt(const juce::String& path, int value)
 
         auto& strip = channels[(size_t) index];
 
+        if (writeGroup(strip.dcaMask, strip.muteMask, tokens, 2, value))
+            return true;
+
         if (tokens.size() >= 4 && tokens[2] == "preamp" && tokens[3] == "invert")
         {
             strip.invert.store(value != 0 ? 1 : 0, std::memory_order_relaxed);
+            return true;
+        }
+
+        if (tokens.size() >= 4 && tokens[2] == "preamp" && tokens[3] == "phantom")
+        {
+            strip.phantom.store(value != 0 ? 1 : 0, std::memory_order_relaxed);
             return true;
         }
 
@@ -1118,6 +1226,12 @@ bool ConsoleModel::assignInt(const juce::String& path, int value)
         if (tokens.size() >= 4 && tokens[2] == "config" && tokens[3] == "icon")
         {
             strip.icon = std::clamp(value, -1, 63);
+            return true;
+        }
+
+        if (tokens.size() >= 4 && tokens[2] == "config" && tokens[3] == "color")
+        {
+            strip.color = std::clamp(value, 0, 15);
             return true;
         }
 
@@ -1199,6 +1313,15 @@ bool ConsoleModel::assignInt(const juce::String& path, int value)
         if (index < 0)
             return false;
 
+        if (writeGroup(buses[(size_t) index].dcaMask, buses[(size_t) index].muteMask, tokens, 2, value))
+            return true;
+
+        if (tokens.size() >= 4 && tokens[2] == "config" && tokens[3] == "color")
+        {
+            buses[(size_t) index].color = std::clamp(value, 0, 15);
+            return true;
+        }
+
         if (tokens.size() >= 4 && tokens[2] == "mix" && tokens[3] == "st")
         {
             buses[(size_t) index].toMain.store(value != 0 ? 1 : 0, std::memory_order_relaxed);
@@ -1232,6 +1355,35 @@ bool ConsoleModel::assignInt(const juce::String& path, int value)
         if (index < 0)
             return false;
 
+        auto& strip = matrices[(size_t) index];
+
+        if (writeGroup(strip.dcaMask, strip.muteMask, tokens, 2, value))
+            return true;
+
+        if (tokens.size() >= 4 && tokens[2] == "insert" && tokens[3] == "pos")
+        {
+            strip.insertPost.store(value != 0 ? 1 : 0, std::memory_order_relaxed);
+            return true;
+        }
+
+        if (tokens.size() >= 4 && tokens[2] == "gate" && tokens[3] == "on")
+        {
+            strip.gate.on.store(value != 0 ? 1 : 0, std::memory_order_relaxed);
+            return true;
+        }
+
+        if (tokens.size() >= 4 && tokens[2] == "gate" && tokens[3] == "mode")
+        {
+            strip.gate.mode.store(std::clamp(value, 0, 4), std::memory_order_relaxed);
+            return true;
+        }
+
+        if (tokens.size() >= 4 && tokens[2] == "config" && tokens[3] == "color")
+        {
+            strip.color = std::clamp(value, 0, 15);
+            return true;
+        }
+
         if (tokens.size() >= 4 && tokens[2] == "mix" && tokens[3] == "st")
         {
             matrices[(size_t) index].toMain.store(value != 0 ? 1 : 0, std::memory_order_relaxed);
@@ -1263,11 +1415,22 @@ bool ConsoleModel::assignInt(const juce::String& path, int value)
     {
         const int index = indexOf(tokens[1], numDcas);
 
-        if (index < 0 || tokens.size() < 3 || tokens[2] != "on")
+        if (index < 0 || tokens.size() < 3)
             return false;
 
-        dcas[(size_t) index].on.store(value != 0 ? 1 : 0, std::memory_order_relaxed);
-        return true;
+        if (tokens[2] == "on")
+        {
+            dcas[(size_t) index].on.store(value != 0 ? 1 : 0, std::memory_order_relaxed);
+            return true;
+        }
+
+        if (tokens[2] == "solo")
+        {
+            dcaSolo[(size_t) index].store(value != 0 ? 1 : 0, std::memory_order_relaxed);
+            return true;
+        }
+
+        return false;
     }
 
     if (tokens[0] == "fx" && tokens.size() >= 3)
@@ -1288,6 +1451,20 @@ bool ConsoleModel::assignInt(const juce::String& path, int value)
             fx[(size_t) slot].on.store(value != 0 ? 1 : 0, std::memory_order_relaxed);
             return true;
         }
+    }
+
+    if (tokens[0] == "auxin" || tokens[0] == "fxrtn" || tokens[0] == "usb")
+    {
+        const int count = tokens[0] == "auxin" ? numAuxIns : tokens[0] == "fxrtn" ? numFxReturns : numUsbReturns;
+        const int index = indexOf(tokens[1], count);
+
+        if (index < 0)
+            return false;
+
+        auto& strip = tokens[0] == "auxin" ? auxIns[(size_t) index]
+                    : tokens[0] == "fxrtn" ? fxReturns[(size_t) index]
+                                           : usbReturns[(size_t) index];
+        return setMixOn(strip, tokens, 2, value);
     }
 
     return false;
@@ -1386,9 +1563,18 @@ bool ConsoleModel::getInt(const juce::String& path, int& value) const
 
         const auto& strip = channels[(size_t) index];
 
+        if (readGroup(strip.dcaMask, strip.muteMask, tokens, 2, value))
+            return true;
+
         if (tokens.size() >= 4 && tokens[2] == "preamp" && tokens[3] == "invert")
         {
             value = strip.invert.load(std::memory_order_relaxed);
+            return true;
+        }
+
+        if (tokens.size() >= 4 && tokens[2] == "preamp" && tokens[3] == "phantom")
+        {
+            value = strip.phantom.load(std::memory_order_relaxed);
             return true;
         }
 
@@ -1425,6 +1611,12 @@ bool ConsoleModel::getInt(const juce::String& path, int& value) const
         if (tokens.size() >= 4 && tokens[2] == "config" && tokens[3] == "icon")
         {
             value = strip.icon;
+            return true;
+        }
+
+        if (tokens.size() >= 4 && tokens[2] == "config" && tokens[3] == "color")
+        {
+            value = strip.color;
             return true;
         }
 
@@ -1506,6 +1698,15 @@ bool ConsoleModel::getInt(const juce::String& path, int& value) const
         if (index < 0)
             return false;
 
+        if (readGroup(buses[(size_t) index].dcaMask, buses[(size_t) index].muteMask, tokens, 2, value))
+            return true;
+
+        if (tokens.size() >= 4 && tokens[2] == "config" && tokens[3] == "color")
+        {
+            value = buses[(size_t) index].color;
+            return true;
+        }
+
         if (tokens.size() >= 4 && tokens[2] == "mix" && tokens[3] == "st")
         {
             value = buses[(size_t) index].toMain.load(std::memory_order_relaxed);
@@ -1539,6 +1740,35 @@ bool ConsoleModel::getInt(const juce::String& path, int& value) const
         if (index < 0)
             return false;
 
+        const auto& strip = matrices[(size_t) index];
+
+        if (readGroup(strip.dcaMask, strip.muteMask, tokens, 2, value))
+            return true;
+
+        if (tokens.size() >= 4 && tokens[2] == "insert" && tokens[3] == "pos")
+        {
+            value = strip.insertPost.load(std::memory_order_relaxed);
+            return true;
+        }
+
+        if (tokens.size() >= 4 && tokens[2] == "gate" && tokens[3] == "on")
+        {
+            value = strip.gate.on.load(std::memory_order_relaxed);
+            return true;
+        }
+
+        if (tokens.size() >= 4 && tokens[2] == "gate" && tokens[3] == "mode")
+        {
+            value = strip.gate.mode.load(std::memory_order_relaxed);
+            return true;
+        }
+
+        if (tokens.size() >= 4 && tokens[2] == "config" && tokens[3] == "color")
+        {
+            value = strip.color;
+            return true;
+        }
+
         if (tokens.size() >= 4 && tokens[2] == "mix" && tokens[3] == "st")
         {
             value = matrices[(size_t) index].toMain.load(std::memory_order_relaxed);
@@ -1570,11 +1800,22 @@ bool ConsoleModel::getInt(const juce::String& path, int& value) const
     {
         const int index = indexOf(tokens[1], numDcas);
 
-        if (index < 0 || tokens.size() < 3 || tokens[2] != "on")
+        if (index < 0 || tokens.size() < 3)
             return false;
 
-        value = dcas[(size_t) index].on.load(std::memory_order_relaxed);
-        return true;
+        if (tokens[2] == "on")
+        {
+            value = dcas[(size_t) index].on.load(std::memory_order_relaxed);
+            return true;
+        }
+
+        if (tokens[2] == "solo")
+        {
+            value = dcaSolo[(size_t) index].load(std::memory_order_relaxed);
+            return true;
+        }
+
+        return false;
     }
 
     if (tokens[0] == "fx" && tokens.size() >= 3)
@@ -1597,6 +1838,20 @@ bool ConsoleModel::getInt(const juce::String& path, int& value) const
         }
     }
 
+    if (tokens[0] == "auxin" || tokens[0] == "fxrtn" || tokens[0] == "usb")
+    {
+        const int count = tokens[0] == "auxin" ? numAuxIns : tokens[0] == "fxrtn" ? numFxReturns : numUsbReturns;
+        const int index = indexOf(tokens[1], count);
+
+        if (index < 0)
+            return false;
+
+        const auto& strip = tokens[0] == "auxin" ? auxIns[(size_t) index]
+                          : tokens[0] == "fxrtn" ? fxReturns[(size_t) index]
+                                                 : usbReturns[(size_t) index];
+        return getMixOn(strip, tokens, 2, value);
+    }
+
     return false;
 }
 
@@ -1615,6 +1870,17 @@ bool ConsoleModel::setString(const juce::String& path, const juce::String& value
             return false;
 
         channelNames[index] = value.substring(0, 12);
+        return true;
+    }
+
+    if (tokens[0] == "bus" && tokens.size() >= 4 && tokens[2] == "config" && tokens[3] == "name")
+    {
+        const int index = indexOf(tokens[1], numBuses);
+
+        if (index < 0)
+            return false;
+
+        setBusName(index, value);
         return true;
     }
 
@@ -1661,6 +1927,17 @@ bool ConsoleModel::getString(const juce::String& path, juce::String& value) cons
             return false;
 
         value = channelNames[index];
+        return true;
+    }
+
+    if (tokens[0] == "bus" && tokens.size() >= 4 && tokens[2] == "config" && tokens[3] == "name")
+    {
+        const int index = indexOf(tokens[1], numBuses);
+
+        if (index < 0)
+            return false;
+
+        value = busNames[index];
         return true;
     }
 
@@ -1848,6 +2125,7 @@ void ConsoleModel::copyChannel(int channelIndex)
     clipboard.hpf = from.hpf.load(std::memory_order_relaxed);
     clipboard.delayTime = from.delayTime.load(std::memory_order_relaxed);
     clipboard.invert = from.invert.load(std::memory_order_relaxed);
+    clipboard.phantom = from.phantom.load(std::memory_order_relaxed);
     clipboard.on = from.on.load(std::memory_order_relaxed);
     clipboard.mainAssign = from.mainAssign.load(std::memory_order_relaxed);
     clipboard.monoAssign = from.monoAssign.load(std::memory_order_relaxed);
@@ -1904,6 +2182,7 @@ void ConsoleModel::pasteChannel(int channelIndex)
     to.hpf.store(clipboard.hpf, std::memory_order_relaxed);
     to.delayTime.store(clipboard.delayTime, std::memory_order_relaxed);
     to.invert.store(clipboard.invert, std::memory_order_relaxed);
+    to.phantom.store(clipboard.phantom, std::memory_order_relaxed);
     to.on.store(clipboard.on, std::memory_order_relaxed);
     to.mainAssign.store(clipboard.mainAssign, std::memory_order_relaxed);
     to.monoAssign.store(clipboard.monoAssign, std::memory_order_relaxed);

@@ -470,8 +470,58 @@ void GroupDsp::prepare(double newSampleRate)
     compHoldLeft = 0;
 }
 
+void GroupDsp::configureGate(const Dynamics& gate) noexcept
+{
+    gateEnabled = gate.on.load(std::memory_order_relaxed) != 0;
+    gateMode = std::clamp(gate.mode.load(std::memory_order_relaxed), 0, 4);
+    gateThresholdDb = vc::gateThresholdDb(loadUnit(gate.threshold));
+    gateRangeDb = vc::gateRangeDb(loadUnit(gate.range));
+    gateThreshold = dbToGain(gateThresholdDb);
+    gateFloor = dbToGain(-gateRangeDb);
+    gateAttack = timeCoefficient(dynamicsMilliseconds(loadUnit(gate.attack), 0.1f, 120.0f), sampleRate);
+    gateRelease = timeCoefficient(dynamicsMilliseconds(loadUnit(gate.release), 5.0f, 4000.0f), sampleRate);
+    gateHoldSamples = (int) std::lround(dynamicsMilliseconds(loadUnit(gate.hold), 0.1f, 2000.0f) * 0.001 * sampleRate);
+}
+
+float GroupDsp::gateGain(float key) noexcept
+{
+    if (! gateEnabled)
+        return 1.0f;
+
+    const float magnitude = std::abs(key);
+    const float follow = magnitude > gateEnvelope ? gateAttack : gateRelease;
+    gateEnvelope += (magnitude - gateEnvelope) * follow;
+    const bool open = gateEnvelope >= gateThreshold;
+    float target = open ? 1.0f : gateFloor;
+
+    if (gateMode == 4)
+        target = open ? gateFloor : 1.0f;
+    else if (gateMode != 0)
+    {
+        const float levelDb = 20.0f * std::log10(gateEnvelope + 1.0e-8f);
+        target = dbToGain(gateOutputDb(levelDb, gateMode, gateThresholdDb, gateRangeDb) - levelDb);
+    }
+
+    if (target >= gateLevel)
+    {
+        gateHoldLeft = gateHoldSamples;
+        gateLevel += (target - gateLevel) * gateAttack;
+    }
+    else if (gateHoldLeft > 0)
+    {
+        --gateHoldLeft;
+    }
+    else
+    {
+        gateLevel += (target - gateLevel) * gateRelease;
+    }
+
+    return std::clamp(gateLevel, 0.0f, 4.0f);
+}
+
 void GroupDsp::configure(const MixPoint& point) noexcept
 {
+    gateEnabled = false;
     eqEnabled = point.eqMaster.load(std::memory_order_relaxed) != 0;
 
     for (int band = 0; band < numEqBands; ++band)
@@ -589,6 +639,13 @@ void GroupDsp::process(float& left, float& right) noexcept
 
         return sample;
     };
+
+    if (gateEnabled)
+    {
+        const float gain = gateGain(std::max(std::abs(left), std::abs(right)));
+        left *= gain;
+        right *= gain;
+    }
 
     if (compPre)
     {

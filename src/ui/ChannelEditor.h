@@ -32,4 +32,23 @@ private:
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ChannelEditor)
 };
 
+class MatrixEditor : public juce::Component
+{
+public:
+    explicit MatrixEditor(ConsoleModel& modelToUse);
+    ~MatrixEditor() override;
+
+    void setMatrix(int matrixIndex);
+    void refresh();
+    void resized() override;
+
+private:
+    class Surface;
+
+    ConsoleModel& model;
+    std::unique_ptr<Surface> surface;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MatrixEditor)
+};
+
 } // namespace vc

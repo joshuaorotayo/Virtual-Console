@@ -4,11 +4,66 @@
 
 #include "model/FaderLaw.h"
 
+#include <array>
 #include <cmath>
 #include <algorithm>
 
 namespace vc
 {
+namespace
+{
+struct GroupControl
+{
+    std::array<float, numDcas> level {};
+    std::array<char, numDcas> muted {};
+    std::array<char, numDcas> solo {};
+    int muteGroups = 0;
+};
+
+struct GroupResult
+{
+    float level = 1.0f;
+    bool muted = false;
+    bool solo = false;
+};
+
+GroupControl readGroupControl(const ConsoleModel& model)
+{
+    GroupControl control;
+
+    for (int group = 0; group < numDcas; ++group)
+    {
+        const auto& dca = model.dca(group);
+        control.level[(size_t) group] = faderToGain(dca.fader.load(std::memory_order_relaxed));
+        control.muted[(size_t) group] = dca.on.load(std::memory_order_relaxed) == 0 ? 1 : 0;
+        control.solo[(size_t) group] = model.dcaSoloState(group).load(std::memory_order_relaxed) != 0 ? 1 : 0;
+    }
+
+    for (int group = 0; group < numMuteGroups; ++group)
+        if (model.muteGroupState(group).load(std::memory_order_relaxed) != 0)
+            control.muteGroups |= 1 << group;
+
+    return control;
+}
+
+GroupResult groupFor(int dcaMask, int muteMask, const GroupControl& control)
+{
+    GroupResult result;
+    result.muted = (muteMask & control.muteGroups) != 0;
+
+    for (int group = 0; group < numDcas; ++group)
+    {
+        if ((dcaMask & (1 << group)) == 0)
+            continue;
+
+        result.level *= control.level[(size_t) group];
+        result.muted = result.muted || control.muted[(size_t) group] != 0;
+        result.solo = result.solo || control.solo[(size_t) group] != 0;
+    }
+
+    return result;
+}
+} // namespace
 
 MixEngine::MixEngine(ConsoleModel& modelToUse)
     : model(modelToUse)
@@ -292,21 +347,28 @@ void MixEngine::channelTargets(int index, float& pflL, float& pflR, float& outL,
 
 void MixEngine::snapSmoothers() noexcept
 {
+    const auto groups = readGroupControl(model);
+    bool anySolo = false;
+
     for (int channel = 0; channel < numChannels; ++channel)
     {
+        const auto& strip = model.channel(channel);
+        const auto group = groupFor(strip.dcaMask.load(std::memory_order_relaxed),
+                                    strip.muteMask.load(std::memory_order_relaxed),
+                                    groups);
         float pflL = 0.0f, pflR = 0.0f, outL = 0.0f, outR = 0.0f;
         channelTargets(channel, pflL, pflR, outL, outR);
+        const float scale = group.muted ? 0.0f : group.level;
         auto& state = smooth[(size_t) channel];
-        state.curL = outL;
-        state.curR = outR;
+        state.curL = outL * scale;
+        state.curR = outR * scale;
         state.curPflL = pflL;
         state.curPflR = pflR;
-        const float enabled = model.channel(channel).on.load(std::memory_order_relaxed) != 0 ? 1.0f : 0.0f;
-        state.curPost = faderToGain(model.channel(channel).fader.load(std::memory_order_relaxed)) * enabled;
-        state.curMono = faderToGain(model.channel(channel).monoLevel.load(std::memory_order_relaxed))
-                      * (model.channel(channel).monoAssign.load(std::memory_order_relaxed) != 0 ? 1.0f : 0.0f);
-
-        const auto& strip = model.channel(channel);
+        state.curPost = faderToGain(strip.fader.load(std::memory_order_relaxed))
+                      * (strip.on.load(std::memory_order_relaxed) != 0 ? scale : 0.0f);
+        state.curMono = faderToGain(strip.monoLevel.load(std::memory_order_relaxed))
+                      * (strip.monoAssign.load(std::memory_order_relaxed) != 0 ? 1.0f : 0.0f);
+        anySolo = anySolo || strip.solo.load(std::memory_order_relaxed) != 0 || group.solo;
 
         for (int bus = 0; bus < numBuses; ++bus)
             sendSmooth[(size_t) channel][(size_t) bus] = faderToGain(strip.sendLevel[bus].load(std::memory_order_relaxed));
@@ -315,11 +377,15 @@ void MixEngine::snapSmoothers() noexcept
     for (int bus = 0; bus < numBuses; ++bus)
     {
         const auto& strip = model.bus(bus);
+        const auto group = groupFor(strip.dcaMask.load(std::memory_order_relaxed),
+                                    strip.muteMask.load(std::memory_order_relaxed),
+                                    groups);
         const float pan = strip.pan.load(std::memory_order_relaxed);
         const float balanceL = pan <= 0.5f ? 1.0f : std::clamp((1.0f - pan) * 2.0f, 0.0f, 1.0f);
         const float balanceR = pan >= 0.5f ? 1.0f : std::clamp(pan * 2.0f, 0.0f, 1.0f);
+        const float scale = group.muted ? 0.0f : group.level;
         const float gain = faderToGain(strip.fader.load(std::memory_order_relaxed))
-                         * (strip.on.load(std::memory_order_relaxed) != 0 ? 1.0f : 0.0f);
+                         * (strip.on.load(std::memory_order_relaxed) != 0 ? scale : 0.0f);
         busSmoothL[(size_t) bus] = balanceL * gain;
         busSmoothR[(size_t) bus] = balanceR * gain;
         busPostSmooth[(size_t) bus] = gain;
@@ -333,8 +399,12 @@ void MixEngine::snapSmoothers() noexcept
     for (int matrix = 0; matrix < numMatrices; ++matrix)
     {
         const auto& strip = model.matrix(matrix);
+        const auto group = groupFor(strip.dcaMask.load(std::memory_order_relaxed),
+                                    strip.muteMask.load(std::memory_order_relaxed),
+                                    groups);
+        const float scale = group.muted ? 0.0f : group.level;
         matrixSmooth[(size_t) matrix] = faderToGain(strip.fader.load(std::memory_order_relaxed))
-                                      * (strip.on.load(std::memory_order_relaxed) != 0 ? 1.0f : 0.0f);
+                                      * (strip.on.load(std::memory_order_relaxed) != 0 ? scale : 0.0f);
         mainStereoMatrixSmooth[(size_t) matrix] = faderToGain(model.mainMatrixLevel(false, matrix).load(std::memory_order_relaxed));
         mainMonoMatrixSmooth[(size_t) matrix] = faderToGain(model.mainMatrixLevel(true, matrix).load(std::memory_order_relaxed));
     }
@@ -345,12 +415,6 @@ void MixEngine::snapSmoothers() noexcept
     const float monoFader = faderToGain(model.mainCenter().fader.load(std::memory_order_relaxed));
     const float monoOn = model.mainCenter().on.load(std::memory_order_relaxed) != 0 ? 1.0f : 0.0f;
     mainMonoGain = monoFader * monoOn;
-
-    bool anySolo = false;
-
-    for (int channel = 0; channel < numChannels; ++channel)
-        if (model.channel(channel).solo.load(std::memory_order_relaxed) != 0)
-            anySolo = true;
 
     const auto listen = model.getListenMode();
     const bool wantSolo = listen == ListenMode::solo || (listen == ListenMode::automatic && anySolo);
@@ -448,20 +512,30 @@ void MixEngine::processChunk(float* left, float* right, int numSamples, juce::in
     std::array<std::array<float, numMatrices>, numBuses> busMatrixTarget {};
     std::array<std::array<char, numMatrices>, numBuses> busMatrixPre {};
     std::array<char, numBuses> busToMain {};
+    std::array<char, numChannels> dcaSoloed {};
+    std::array<char, numBuses> busDcaSolo {};
     bool anySolo = false;
+    const auto groups = readGroupControl(model);
 
     for (int channel = 0; channel < numChannels; ++channel)
     {
         const auto& strip = model.channel(channel);
+        const auto group = groupFor(strip.dcaMask.load(std::memory_order_relaxed),
+                                    strip.muteMask.load(std::memory_order_relaxed),
+                                    groups);
+        const float scale = group.muted ? 0.0f : group.level;
         channelTargets(channel, targetPflL[(size_t) channel], targetPflR[(size_t) channel],
                        targetL[(size_t) channel], targetR[(size_t) channel]);
+        targetL[(size_t) channel] *= scale;
+        targetR[(size_t) channel] *= scale;
         soloed[(size_t) channel] = strip.solo.load(std::memory_order_relaxed) != 0 ? 1 : 0;
+        dcaSoloed[(size_t) channel] = group.solo ? 1 : 0;
         toMain[(size_t) channel] = strip.mainAssign.load(std::memory_order_relaxed) != 0 ? 1 : 0;
-        audible[(size_t) channel] = strip.on.load(std::memory_order_relaxed) != 0 ? 1 : 0;
-        postTarget[(size_t) channel] = faderToGain(strip.fader.load(std::memory_order_relaxed)) * audible[(size_t) channel];
+        audible[(size_t) channel] = strip.on.load(std::memory_order_relaxed) != 0 && ! group.muted ? 1 : 0;
+        postTarget[(size_t) channel] = faderToGain(strip.fader.load(std::memory_order_relaxed)) * audible[(size_t) channel] * group.level;
         monoTarget[(size_t) channel] = faderToGain(strip.monoLevel.load(std::memory_order_relaxed))
                                      * (strip.monoAssign.load(std::memory_order_relaxed) != 0 ? 1.0f : 0.0f);
-        anySolo = anySolo || soloed[(size_t) channel] != 0;
+        anySolo = anySolo || soloed[(size_t) channel] != 0 || dcaSoloed[(size_t) channel] != 0;
 
         for (int bus = 0; bus < numBuses; ++bus)
         {
@@ -473,11 +547,17 @@ void MixEngine::processChunk(float* left, float* right, int numSamples, juce::in
     for (int bus = 0; bus < numBuses; ++bus)
     {
         const auto& strip = model.bus(bus);
+        const auto group = groupFor(strip.dcaMask.load(std::memory_order_relaxed),
+                                    strip.muteMask.load(std::memory_order_relaxed),
+                                    groups);
+        const float scale = group.muted ? 0.0f : group.level;
         const float pan = strip.pan.load(std::memory_order_relaxed);
         const float balanceL = pan <= 0.5f ? 1.0f : std::clamp((1.0f - pan) * 2.0f, 0.0f, 1.0f);
         const float balanceR = pan >= 0.5f ? 1.0f : std::clamp(pan * 2.0f, 0.0f, 1.0f);
         const float gain = faderToGain(strip.fader.load(std::memory_order_relaxed))
-                         * (strip.on.load(std::memory_order_relaxed) != 0 ? 1.0f : 0.0f);
+                         * (strip.on.load(std::memory_order_relaxed) != 0 ? scale : 0.0f);
+        busDcaSolo[(size_t) bus] = group.solo ? 1 : 0;
+        anySolo = anySolo || group.solo;
         busTargetL[(size_t) bus] = balanceL * gain;
         busTargetR[(size_t) bus] = balanceR * gain;
         busPostTarget[(size_t) bus] = gain;
@@ -493,6 +573,7 @@ void MixEngine::processChunk(float* left, float* right, int numSamples, juce::in
     }
 
     std::array<float, numMatrices> matrixTarget {};
+    std::array<char, numMatrices> matrixInsertPost {};
     std::array<float, numMatrices> mainStereoMatrixTarget {};
     std::array<float, numMatrices> mainMonoMatrixTarget {};
     const int speakerSource = std::clamp(model.getSpeakerSource(), 0, numBuses);
@@ -500,8 +581,13 @@ void MixEngine::processChunk(float* left, float* right, int numSamples, juce::in
     for (int matrix = 0; matrix < numMatrices; ++matrix)
     {
         const auto& strip = model.matrix(matrix);
+        const auto group = groupFor(strip.dcaMask.load(std::memory_order_relaxed),
+                                    strip.muteMask.load(std::memory_order_relaxed),
+                                    groups);
+        const float scale = group.muted ? 0.0f : group.level;
         matrixTarget[(size_t) matrix] = faderToGain(strip.fader.load(std::memory_order_relaxed))
-                                      * (strip.on.load(std::memory_order_relaxed) != 0 ? 1.0f : 0.0f);
+                                      * (strip.on.load(std::memory_order_relaxed) != 0 ? scale : 0.0f);
+        matrixInsertPost[(size_t) matrix] = (char) strip.insertPost.load(std::memory_order_relaxed);
         mainStereoMatrixTarget[(size_t) matrix] = faderToGain(model.mainMatrixLevel(false, matrix).load(std::memory_order_relaxed));
         mainMonoMatrixTarget[(size_t) matrix] = faderToGain(model.mainMatrixLevel(true, matrix).load(std::memory_order_relaxed));
     }
@@ -516,7 +602,10 @@ void MixEngine::processChunk(float* left, float* right, int numSamples, juce::in
         busDsp[(size_t) bus].configure(model.bus(bus));
 
     for (int matrix = 0; matrix < numMatrices; ++matrix)
+    {
         matrixDsp[(size_t) matrix].configure(model.matrix(matrix));
+        matrixDsp[(size_t) matrix].configureGate(model.matrix(matrix).gate);
+    }
 
     mainDsp.configure(model.mainStereo());
     centerDsp.configure(model.mainCenter());
@@ -561,6 +650,11 @@ void MixEngine::processChunk(float* left, float* right, int numSamples, juce::in
             {
                 soloBufL[(size_t) sample] += input * state.curPflL;
                 soloBufR[(size_t) sample] += input * state.curPflR;
+            }
+            else if (dcaSoloed[(size_t) channel] != 0)
+            {
+                soloBufL[(size_t) sample] += leftSample;
+                soloBufR[(size_t) sample] += rightSample;
             }
 
             for (int bus = 0; bus < numBuses; ++bus)
@@ -610,6 +704,12 @@ void MixEngine::processChunk(float* left, float* right, int numSamples, juce::in
 
             const float busMono = 0.5f * (busSumL[(size_t) bus] + busSumR[(size_t) bus]);
             monoSum += busMono * busPostSmooth[(size_t) bus] * busMonoSmooth[(size_t) bus];
+
+            if (busDcaSolo[(size_t) bus] != 0)
+            {
+                soloBufL[(size_t) sample] += busSumL[(size_t) bus] * busSmoothL[(size_t) bus];
+                soloBufR[(size_t) sample] += busSumR[(size_t) bus] * busSmoothR[(size_t) bus];
+            }
         }
 
         mainGain += (mainTarget - mainGain) * smoothCoeff;
@@ -659,9 +759,15 @@ void MixEngine::processChunk(float* left, float* right, int numSamples, juce::in
             matrixR += lrR * mainStereoMatrixSmooth[(size_t) matrix];
             matrixL += centerSample * mainMonoGain * mainMonoMatrixSmooth[(size_t) matrix];
             matrixR += centerSample * mainMonoGain * mainMonoMatrixSmooth[(size_t) matrix];
-            matrixDsp[(size_t) matrix].process(matrixL, matrixR);
+
+            if (matrixInsertPost[(size_t) matrix] == 0)
+                matrixDsp[(size_t) matrix].process(matrixL, matrixR);
+
             matrixL *= matrixSmooth[(size_t) matrix];
             matrixR *= matrixSmooth[(size_t) matrix];
+
+            if (matrixInsertPost[(size_t) matrix] != 0)
+                matrixDsp[(size_t) matrix].process(matrixL, matrixR);
             juce::ignoreUnused(matrixL, matrixR);
         }
 

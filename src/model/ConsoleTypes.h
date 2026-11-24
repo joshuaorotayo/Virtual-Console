@@ -13,6 +13,7 @@ constexpr int numBuses = 16;
 constexpr int numMatrices = 6;
 constexpr int numFxReturns = 8;
 constexpr int numAuxIns = 6;
+constexpr int numUsbReturns = 2;
 constexpr int numFxSlots = 8;
 constexpr int numDcas = 8;
 constexpr int numMuteGroups = 6;
@@ -80,12 +81,20 @@ struct Bus : MixPoint
     std::atomic<float> monoLevel { 0.75f };
     std::atomic<float> matrixLevel[numMatrices] {};
     std::atomic<int> matrixPre[numMatrices] {};
+    std::atomic<int> dcaMask { 0 };
+    std::atomic<int> muteMask { 0 };
+    int color = 0;
 };
 
 struct Matrix : MixPoint
 {
     std::atomic<int> toMain { 0 };
     std::atomic<int> toMono { 0 };
+    Dynamics gate {};
+    std::atomic<int> insertPost { 0 };
+    std::atomic<int> dcaMask { 0 };
+    std::atomic<int> muteMask { 0 };
+    int color = 0;
 };
 
 struct Channel : MixPoint
@@ -93,6 +102,7 @@ struct Channel : MixPoint
     std::atomic<int> solo { 0 };
     std::atomic<float> trim { 0.5f };
     std::atomic<int> invert { 0 };
+    std::atomic<int> phantom { 0 };
     std::atomic<int> source { -1 };
     std::atomic<int> mainAssign { 1 };
     std::atomic<int> monoAssign { 0 };
@@ -105,8 +115,8 @@ struct Channel : MixPoint
     Dynamics gate {};
     std::atomic<float> sendLevel[numBuses] {};
     std::atomic<int> sendPre[numBuses] {};
-    int dcaMask = 0;
-    int muteMask = 0;
+    std::atomic<int> dcaMask { 0 };
+    std::atomic<int> muteMask { 0 };
     int color = 0;
     int icon = -1;
 };

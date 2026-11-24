@@ -1,6 +1,7 @@
 #pragma once
 
 #include "model/ConsoleModel.h"
+#include "ui/StripColour.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
@@ -26,14 +27,14 @@ inline const char* channelIconName(int index)
     return names[index];
 }
 
-inline void drawChannelIcon(juce::Graphics& g, juce::Rectangle<float> area, int index)
+inline void drawChannelIcon(juce::Graphics& g, juce::Rectangle<float> area, int index, juce::Colour ink = juce::Colours::white)
 {
     if (index < 0 || index >= numChannelIcons || area.getWidth() < 4.0f)
         return;
 
     const auto r = area.reduced(area.getWidth() * 0.08f);
     const float stroke = juce::jmax(1.15f, r.getWidth() * 0.07f);
-    g.setColour(juce::Colours::white);
+    g.setColour(ink);
 
     auto X = [&](float u) { return r.getX() + u * r.getWidth(); };
     auto Y = [&](float v) { return r.getY() + v * r.getHeight(); };
@@ -110,13 +111,16 @@ inline void drawChannelIcon(juce::Graphics& g, juce::Rectangle<float> area, int 
     }
 }
 
-class ChannelIconButton : public juce::Button
+class ChannelIconButton : public juce::Button,
+                          private juce::Timer
 {
 public:
+    std::function<void()> onDoubleClick;
+
     ChannelIconButton()
         : juce::Button("icon")
     {
-        setTooltip("Choose an icon for this channel");
+        setTooltip("Click to choose an icon. Double-click to choose a colour");
     }
 
     void setIcon(int next)
@@ -125,22 +129,66 @@ public:
         repaint();
     }
 
+    void setStripColour(int stored)
+    {
+        colour = std::clamp(stored, 0, 15);
+        repaint();
+    }
+
     int getIcon() const noexcept { return icon; }
 
-    void paintButton(juce::Graphics& g, bool over, bool) override
+    void paintButton(juce::Graphics& g, bool, bool) override
     {
         auto bounds = getLocalBounds().toFloat().reduced(1.0f);
-        g.setColour(juce::Colour(0xff101418));
-        g.fillRoundedRectangle(bounds, 4.0f);
-        g.setColour(over ? juce::Colour(0xff7eb6d6) : juce::Colour(0xff3c4450));
-        g.drawRoundedRectangle(bounds, 4.0f, 1.2f);
+        paintColourIcon(g, bounds, colour);
 
         if (icon >= 0)
-            drawChannelIcon(g, bounds.reduced(2.0f), icon);
+            drawChannelIcon(g, bounds.reduced(2.0f), icon, stripIconInk(colour));
+    }
+
+    void mouseDown(const juce::MouseEvent& event) override
+    {
+        if (event.getNumberOfClicks() > 1)
+        {
+            stopTimer();
+            doubled = true;
+            setState(buttonNormal);
+            return;
+        }
+
+        doubled = false;
+        juce::Button::mouseDown(event);
+    }
+
+    void mouseUp(const juce::MouseEvent& event) override
+    {
+        setState(buttonNormal);
+
+        if (! doubled && event.getNumberOfClicks() == 1 && getLocalBounds().contains(event.getPosition()))
+            startTimer(250);
+    }
+
+    void mouseDoubleClick(const juce::MouseEvent&) override
+    {
+        stopTimer();
+        doubled = true;
+
+        if (onDoubleClick != nullptr)
+            onDoubleClick();
     }
 
 private:
+    void timerCallback() override
+    {
+        stopTimer();
+
+        if (! doubled)
+            triggerClick();
+    }
+
     int icon = -1;
+    int colour = 0;
+    bool doubled = false;
 };
 
 class ChannelIconPicker : public juce::Component,

@@ -1,5 +1,6 @@
 #include "ui/ChannelEditor.h"
 #include "ui/ChannelIcons.h"
+#include "ui/GroupPad.h"
 
 #include "dsp/FilterDesign.h"
 #include "model/DspLaw.h"
@@ -21,11 +22,6 @@ juce::Colour engaged() { return juce::Colour(0xff8a6a32); }
 juce::String channelPath(int index, const juce::String& leaf)
 {
     return "/ch/" + juce::String(index + 1).paddedLeft('0', 2) + "/" + leaf;
-}
-
-juce::Colour channelColour(int index)
-{
-    return juce::Colour::fromHSV(std::fmod(index * 0.17f, 1.0f), 0.55f, 0.78f, 1.0f);
 }
 
 juce::String hertzText(float hertz)
@@ -230,8 +226,8 @@ private:
 
 juce::Colour eqBandColour(int band)
 {
-    static const juce::uint32 colours[] = { 0xffe0b040, 0xff3dce7a, 0xff7eb6d6, 0xffd27ad4, 0xffe07a7a };
-    return juce::Colour(colours[band % 5]);
+    static const juce::uint32 colours[] = { 0xffe0b040, 0xff3dce7a, 0xff7eb6d6, 0xffd27ad4, 0xffe07a7a, 0xfff2f5f8 };
+    return juce::Colour(colours[band % 6]);
 }
 
 class ControlBox : public juce::Component
@@ -424,6 +420,12 @@ public:
         repaint();
     }
 
+    void setPathRoot(const juce::String& root)
+    {
+        pathRoot = root;
+        repaint();
+    }
+
     void paint(juce::Graphics& g) override
     {
         auto bounds = getLocalBounds().toFloat().reduced(1.0f);
@@ -561,7 +563,7 @@ private:
     void writeUnit(const char* leaf, float unit)
     {
         const auto root = kind == Kind::gate ? juce::String("gate/") : juce::String("dyn/");
-        model.setFloat(channelPath(index, root + leaf), clamp01(unit));
+        model.setFloat(scoped(root + leaf), clamp01(unit));
         repaint();
     }
 
@@ -644,7 +646,7 @@ private:
     {
         float value = fallback;
         const auto root = kind == Kind::gate ? juce::String("gate/") : juce::String("dyn/");
-        model.getFloat(channelPath(index, root + leaf), value);
+        model.getFloat(scoped(root + leaf), value);
         return value;
     }
 
@@ -652,7 +654,7 @@ private:
     {
         int value = 0;
         const auto root = kind == Kind::gate ? juce::String("gate/") : juce::String("dyn/");
-        model.getInt(channelPath(index, root + leaf), value);
+        model.getInt(scoped(root + leaf), value);
         return value;
     }
 
@@ -679,9 +681,15 @@ private:
                                    compMakeupDb(readUnit("mgain", 0.5f)));
     }
 
+    juce::String scoped(const juce::String& leaf) const
+    {
+        return pathRoot.isNotEmpty() ? pathRoot + "/" + leaf : channelPath(index, leaf);
+    }
+
     ConsoleModel& model;
     Kind kind;
     int index = 0;
+    juce::String pathRoot;
     bool dragging = false;
     float anchorY = 0.0f;
     float secondaryAtAnchor = 0.5f;
@@ -700,6 +708,14 @@ public:
     void setChannel(int channelIndex)
     {
         index = channelIndex;
+        repaint();
+    }
+
+    void setTarget(const juce::String& root, int bands, bool hpf)
+    {
+        pathRoot = root;
+        bandCount = juce::jlimit(1, numEqBands, bands);
+        showHpf = hpf;
         repaint();
     }
 
@@ -756,11 +772,11 @@ public:
         }
 
         const auto hpf = readHpf();
-        std::array<Band, numChannelEqBands> bands {};
+        std::array<Band, numEqBands> bands {};
         int eqEnabled = 1;
-        model.getInt(channelPath(index, "eq/on"), eqEnabled);
+        model.getInt(scoped("eq/on"), eqEnabled);
 
-        for (int band = 0; band < numChannelEqBands; ++band)
+        for (int band = 0; band < bandCount; ++band)
             bands[(size_t) band] = readBand(band);
 
         if (eqEnabled == 0)
@@ -799,7 +815,7 @@ public:
             return path;
         };
 
-        for (int band = 0; band < numChannelEqBands; ++band)
+        for (int band = 0; band < bandCount; ++band)
         {
             const auto& bandState = bands[(size_t) band];
 
@@ -811,14 +827,14 @@ public:
                       band == selected ? 2.0f : 1.25f);
         }
 
-        if (hpf.enabled)
+        if (showHpf && hpf.enabled)
             drawCurve([&](float hz) { return biquadMagnitudeDb(hpf.coeffs, hz, sampleRate); },
                       juce::Colour(0xfff2f5f8).withAlpha(0.45f),
                       1.25f);
 
         const auto sum = drawCurve([&](float hz)
                                     {
-                                        float db = hpf.enabled ? biquadMagnitudeDb(hpf.coeffs, hz, sampleRate) : 0.0f;
+                                        float db = showHpf && hpf.enabled ? biquadMagnitudeDb(hpf.coeffs, hz, sampleRate) : 0.0f;
 
                                         for (const auto& bandState : bands)
                                             if (bandState.contributes)
@@ -830,9 +846,10 @@ public:
                                     2.2f);
         juce::ignoreUnused(sum);
 
-        drawHandle(g, plot, xForHz(hpf.frequency, plot), yForDb(0.0f, plot), juce::Colour(0xfff2f5f8), hpf.enabled, selected == hpfId, "H");
+        if (showHpf)
+            drawHandle(g, plot, xForHz(hpf.frequency, plot), yForDb(0.0f, plot), juce::Colour(0xfff2f5f8), hpf.enabled, selected == hpfId, "H");
 
-        for (int band = 0; band < numChannelEqBands; ++band)
+        for (int band = 0; band < bandCount; ++band)
         {
             const auto& bandState = bands[(size_t) band];
             const float gain = bandState.usesGain ? bandState.gain : 0.0f;
@@ -846,9 +863,9 @@ public:
                        juce::String(band + 1));
         }
 
-        if (selected == hpfId)
+        if (showHpf && selected == hpfId)
             drawReadout(g, plot, xForHz(hpf.frequency, plot), yForDb(0.0f, plot), "HPF  " + hertzText(hpf.frequency));
-        else if (selected >= 0 && selected < numChannelEqBands)
+        else if (selected >= 0 && selected < bandCount)
         {
             const auto& bandState = bands[(size_t) selected];
             juce::String readout = "Band " + juce::String(selected + 1) + "  " + hertzText(bandState.frequency);
@@ -879,10 +896,10 @@ public:
             return;
         }
 
-        if (selected == hpfId)
-            model.setInt(channelPath(index, "preamp/hpon"), 1);
-        else
-            model.setInt(channelPath(index, "eq/" + juce::String(selected + 1) + "/on"), 1);
+        if (selected == hpfId && showHpf)
+            model.setInt(scoped("preamp/hpon"), 1);
+        else if (selected >= 0)
+            model.setInt(scoped("eq/" + juce::String(selected + 1) + "/on"), 1);
 
         applyDrag(event.position);
     }
@@ -897,9 +914,9 @@ public:
     {
         const int hit = hitTest(event.position);
 
-        if (hit >= 0 && hit < numChannelEqBands)
+        if (hit >= 0 && hit < bandCount)
         {
-            model.setFloat(channelPath(index, "eq/" + juce::String(hit + 1) + "/g"), 0.5f);
+            model.setFloat(scoped("eq/" + juce::String(hit + 1) + "/g"), 0.5f);
             repaint();
         }
     }
@@ -908,7 +925,7 @@ public:
     {
         const int hit = selected != noneId && isMouseButtonDown() ? selected : hitTest(event.position);
 
-        if (hit < 0 || hit >= numChannelEqBands)
+        if (hit < 0 || hit >= bandCount)
             return;
 
         const auto band = readBand(hit);
@@ -917,7 +934,7 @@ public:
             return;
 
         const float next = eqQUnit(band.q) - wheel.deltaY * 0.08f;
-        model.setFloat(channelPath(index, "eq/" + juce::String(hit + 1) + "/q"), clamp01(next));
+        model.setFloat(scoped("eq/" + juce::String(hit + 1) + "/q"), clamp01(next));
         selected = hit;
         repaint();
     }
@@ -991,8 +1008,8 @@ private:
         Hpf hpf;
         int enabled = 0;
         float unit = 0.2f;
-        model.getInt(channelPath(index, "preamp/hpon"), enabled);
-        model.getFloat(channelPath(index, "preamp/hpf"), unit);
+        model.getInt(scoped("preamp/hpon"), enabled);
+        model.getFloat(scoped("preamp/hpf"), unit);
         hpf.enabled = enabled != 0;
         hpf.frequency = hpfFrequencyHz(unit);
         hpf.coeffs = designHighPass(hpf.frequency, sampleRate);
@@ -1008,11 +1025,11 @@ private:
         float frequency = 0.5f;
         float gain = 0.5f;
         float q = 0.5f;
-        model.getInt(channelPath(index, prefix + "on"), enabled);
-        model.getInt(channelPath(index, prefix + "t"), type);
-        model.getFloat(channelPath(index, prefix + "f"), frequency);
-        model.getFloat(channelPath(index, prefix + "g"), gain);
-        model.getFloat(channelPath(index, prefix + "q"), q);
+        model.getInt(scoped(prefix + "on"), enabled);
+        model.getInt(scoped(prefix + "t"), type);
+        model.getFloat(scoped(prefix + "f"), frequency);
+        model.getFloat(scoped(prefix + "g"), gain);
+        model.getFloat(scoped(prefix + "q"), q);
         state.enabled = enabled != 0;
         state.type = type;
         state.frequency = eqFrequencyHz(frequency);
@@ -1048,13 +1065,13 @@ private:
         const auto hpf = readHpf();
         const float hpfDistance = position.getDistanceFrom({ xForHz(hpf.frequency, plot), yForDb(0.0f, plot) });
 
-        if (hpfDistance < bestDistance)
+        if (showHpf && hpfDistance < bestDistance)
         {
             best = hpfId;
             bestDistance = hpfDistance;
         }
 
-        for (int band = 0; band < numChannelEqBands; ++band)
+        for (int band = 0; band < bandCount; ++band)
         {
             const auto state = readBand(band);
             const float gain = state.usesGain ? state.gain : 0.0f;
@@ -1076,16 +1093,16 @@ private:
 
         if (selected == hpfId)
         {
-            model.setFloat(channelPath(index, "preamp/hpf"), hpfFrequencyUnit(std::min(400.0f, hzForX(position.x, plot))));
+            model.setFloat(scoped("preamp/hpf"), hpfFrequencyUnit(std::min(400.0f, hzForX(position.x, plot))));
         }
-        else if (selected >= 0 && selected < numChannelEqBands)
+        else if (selected >= 0 && selected < bandCount)
         {
             const auto prefix = "eq/" + juce::String(selected + 1) + "/";
             const auto state = readBand(selected);
-            model.setFloat(channelPath(index, prefix + "f"), eqFrequencyUnit(hzForX(position.x, plot)));
+            model.setFloat(scoped(prefix + "f"), eqFrequencyUnit(hzForX(position.x, plot)));
 
             if (state.usesGain)
-                model.setFloat(channelPath(index, prefix + "g"), eqGainUnit(dbForY(position.y, plot)));
+                model.setFloat(scoped(prefix + "g"), eqGainUnit(dbForY(position.y, plot)));
         }
 
         repaint();
@@ -1126,9 +1143,17 @@ private:
         g.drawText(readout, left + 4, juce::roundToInt(y - 18.0f), width - 8, 16, juce::Justification::centredLeft, false);
     }
 
+    juce::String scoped(const juce::String& leaf) const
+    {
+        return pathRoot.isNotEmpty() ? pathRoot + "/" + leaf : channelPath(index, leaf);
+    }
+
     ConsoleModel& model;
     int index = 0;
     int selected = noneId;
+    juce::String pathRoot;
+    int bandCount = numChannelEqBands;
+    bool showHpf = true;
 };
 
 class SendsBoard : public juce::Component
@@ -1388,6 +1413,155 @@ private:
     int& channel;
     int dragBus = -1;
 };
+
+class BusSendColumn : public juce::Component,
+                      public juce::SettableTooltipClient
+{
+public:
+    BusSendColumn(ConsoleModel& modelToUse, int& channelToUse)
+        : model(modelToUse), channel(channelToUse)
+    {
+        for (auto& level : levels)
+            level = 0.0f;
+    }
+
+    void refresh()
+    {
+        for (int bus = 0; bus < numBuses; ++bus)
+        {
+            if (bus == dragBus)
+                continue;
+
+            float level = 0.0f;
+            model.getFloat(channelPath(channel, "mix/" + busNumber(bus) + "/level"), level);
+            levels[(size_t) bus] = level;
+        }
+
+        repaint();
+    }
+
+    void paint(juce::Graphics& g) override
+    {
+        auto bounds = getLocalBounds().reduced(4, 2);
+        g.setColour(text());
+        g.setFont(juce::Font(juce::FontOptions(14.0f)));
+        g.drawText("Bus Sends", bounds.removeFromTop(18), juce::Justification::centredLeft);
+
+        for (int bus = 0; bus < numBuses; ++bus)
+        {
+            auto row = rowFor(bus);
+            auto number = row.removeFromLeft(26);
+            int stored = bus % 8;
+            model.getInt("/bus/" + busNumber(bus) + "/config/color", stored);
+            const auto colour = stripColourFrom(stored);
+            auto numberArea = number.toFloat().reduced(3.0f, 1.0f);
+
+            if (stripColourIndex(stored) == 0)
+            {
+                g.setColour(juce::Colour(0xff101418));
+                g.fillRoundedRectangle(numberArea, 3.0f);
+                g.setColour(juce::Colours::white);
+            }
+            else
+            {
+                g.setColour(colour);
+            }
+
+            g.setFont(juce::Font(juce::FontOptions(juce::jmax(11.0f, (float) number.getHeight() * 0.55f))));
+            g.drawText(juce::String(bus + 1), number, juce::Justification::centredRight);
+
+            const auto track = trackFor(row);
+            g.setColour(juce::Colour(0xff2a3038));
+            g.fillRect(track);
+
+            const float value = clamp01(levels[(size_t) bus]);
+            auto fill = track.withWidth(juce::jmax(0.0f, track.getWidth() * value));
+            g.setColour(colour);
+            g.fillRect(fill);
+
+            const float unityX = track.getX() + track.getWidth() * 0.75f;
+            g.setColour(juce::Colours::black.withAlpha(0.85f));
+            g.drawLine(unityX + 1.0f, track.getY() - 3.0f, unityX + 1.0f, track.getBottom() + 3.0f, 1.0f);
+            g.setColour(juce::Colour(0xfff4f7fa));
+            g.drawLine(unityX, track.getY() - 3.0f, unityX, track.getBottom() + 3.0f, 1.0f);
+        }
+    }
+
+    void mouseDown(const juce::MouseEvent& event) override
+    {
+        dragBus = busAt(event.position);
+        apply(event.position, event.getNumberOfClicks() > 1);
+    }
+
+    void mouseDrag(const juce::MouseEvent& event) override
+    {
+        apply(event.position, false);
+    }
+
+    void mouseUp(const juce::MouseEvent&) override
+    {
+        dragBus = -1;
+    }
+
+    void mouseDoubleClick(const juce::MouseEvent& event) override
+    {
+        dragBus = busAt(event.position);
+        apply(event.position, true);
+        dragBus = -1;
+    }
+
+private:
+    static juce::String busNumber(int bus)
+    {
+        return juce::String(bus + 1).paddedLeft('0', 2);
+    }
+
+    juce::Rectangle<int> rowFor(int bus) const
+    {
+        auto bounds = getLocalBounds().reduced(4, 2);
+        bounds.removeFromTop(18);
+        const int rowH = juce::jmax(1, bounds.getHeight() / numBuses);
+        const int y = bounds.getY() + bus * rowH;
+        const int height = bus == numBuses - 1 ? bounds.getBottom() - y : rowH;
+        return { bounds.getX(), y, bounds.getWidth(), juce::jmax(1, height) };
+    }
+
+    juce::Rectangle<float> trackFor(juce::Rectangle<int> row) const
+    {
+        auto track = row.toFloat().reduced(6.0f, 0.0f);
+        const float height = juce::jlimit(6.0f, 12.0f, row.getHeight() * 0.46f);
+        return track.withSizeKeepingCentre(track.getWidth(), height);
+    }
+
+    int busAt(juce::Point<float> position) const
+    {
+        for (int bus = 0; bus < numBuses; ++bus)
+            if (rowFor(bus).contains(position.toInt()))
+                return bus;
+
+        return -1;
+    }
+
+    void apply(juce::Point<float> position, bool unity)
+    {
+        if (dragBus < 0)
+            return;
+
+        auto row = rowFor(dragBus);
+        row.removeFromLeft(26);
+        const auto track = trackFor(row);
+        const float unit = unity ? 0.75f : clamp01((position.x - track.getX()) / juce::jmax(1.0f, track.getWidth()));
+        levels[(size_t) dragBus] = unit;
+        model.setFloat(channelPath(channel, "mix/" + busNumber(dragBus) + "/level"), unit);
+        setTooltip("Bus " + juce::String(dragBus + 1) + " send  " + decibelText(faderToDb(unit)) + ". The tick is unity");
+        repaint();
+    }
+
+    ConsoleModel& model;
+    int& channel;
+    std::array<float, numBuses> levels {};
+    int dragBus = -1;
+};
 } // namespace
 
 class ChannelEditor::Surface : public juce::Component
@@ -1451,6 +1625,10 @@ public:
         {
             openChannelIconPicker(channelIcon, model, index, [this] { refresh(); });
         };
+        channelIcon.onDoubleClick = [this]
+        {
+            openStripColourPicker(channelIcon, model, channelPath(index, "config/color"), [this] { refresh(); });
+        };
         addAndMakeVisible(channelIcon);
 
         name.setJustificationType(juce::Justification::centredLeft);
@@ -1507,6 +1685,9 @@ public:
 
         trim = addSlider("Trim", "preamp/trim", [](float value) { return decibelText(trimToDb(value)); });
         polarity = addFlag("Polarity", "preamp/invert");
+        phantom = addFlag("+48V", "preamp/phantom");
+        phantom->setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xffe23b3b));
+        phantom->setTooltip("Phantom power. Stored for a real mixer; it does not change the virtual audio");
         hpfOn = addFlag("HPF", "preamp/hpon");
         eqOn = addFlag("EQ", "eq/on");
         hpfFreq = addSlider("Frequency", "preamp/hpf", [](float value) { return hertzText(hpfFrequencyHz(value)); });
@@ -1611,6 +1792,10 @@ public:
         addAndMakeVisible(compGraph);
         sendsBoard = std::make_unique<SendsBoard>(model, index);
         addAndMakeVisible(*sendsBoard);
+        groupPad = std::make_unique<GroupPad>(model);
+        addAndMakeVisible(*groupPad);
+        busSends = std::make_unique<BusSendColumn>(model, index);
+        addAndMakeVisible(*busSends);
         show(Page::channel);
         refresh();
     }
@@ -1638,9 +1823,19 @@ public:
         int icon = -1;
         model.getInt(channelPath(index, "config/icon"), icon);
         channelIcon.setIcon(icon);
+        int colour = 6;
+        model.getInt(channelPath(index, "config/color"), colour);
+        channelIcon.setStripColour(colour);
+        name.setColour(juce::Label::textColourId, stripNameColour(colour));
 
         if (sendsBoard != nullptr)
             sendsBoard->repaint();
+
+        if (groupPad != nullptr)
+            groupPad->setRoot("/ch/" + juce::String(index + 1).paddedLeft('0', 2));
+
+        if (busSends != nullptr)
+            busSends->refresh();
 
         if (! name.isBeingEdited())
             name.setText(model.getChannelName(index), juce::dontSendNotification);
@@ -1693,7 +1888,9 @@ public:
     void paint(juce::Graphics& g) override
     {
         g.fillAll(panel());
-        g.setColour(channelColour(index));
+        int stored = 6;
+        model.getInt(channelPath(index, "config/color"), stored);
+        g.setColour(stripColourFrom(stored));
         g.fillRect(0, 0, 6, getHeight());
         g.setColour(juce::Colour(0xff2c333b));
         g.fillRect(0, 76, getWidth(), 1);
@@ -1741,42 +1938,63 @@ public:
 
         if (page == Page::channel)
         {
-            auto row = body.removeFromTop(juce::jmin(136, body.getHeight()));
-            const int preampW = juce::jmin(210, juce::jmax(150, row.getWidth() / 5));
-            const int delayW = juce::jmin(200, juce::jmax(150, row.getWidth() / 5));
-            auto preampArea = row.removeFromLeft(preampW).reduced(3);
-            auto delayArea = row.removeFromRight(delayW).reduced(3);
-            auto configArea = row.reduced(3);
-            preampBox.setBounds(preampArea);
+            auto sendsColumn = body.removeFromRight(juce::jlimit(210, 280, body.getWidth() / 4));
+
+            if (busSends != nullptr)
+                busSends->setBounds(sendsColumn);
+
+            auto configArea = body.removeFromTop(juce::jmin(112, juce::jmax(88, body.getHeight() / 4))).reduced(3);
             configBox.setBounds(configArea);
-            delayBox.setBounds(delayArea);
-
-            auto placeKnobAndButton = [&](juce::Rectangle<int> inner, UnitSlider* knob, juce::Component* button)
-            {
-                inner.removeFromTop(16);
-
-                if (knob != nullptr)
-                    knob->setBounds(inner.removeFromLeft(juce::jmin(104, juce::jmax(72, inner.getWidth() / 2))).reduced(2, 0));
-
-                if (button != nullptr)
-                    button->setBounds(inner.withSizeKeepingCentre(juce::jmin(84, inner.getWidth()), 28));
-            };
-
-            placeKnobAndButton(preampArea.reduced(8, 6), trim, polarity);
 
             auto configInner = configArea.reduced(8, 6);
             configInner.removeFromTop(16);
-            auto levelColumn = configInner.removeFromRight(juce::jmin(100, juce::jmax(72, configInner.getWidth() / 4)));
+            auto levelColumn = configInner.removeFromRight(juce::jmin(108, juce::jmax(84, configInner.getWidth() / 5)));
 
             if (monoLevel != nullptr)
                 monoLevel->setBounds(levelColumn.reduced(2, 0));
 
+            auto assign = configInner.removeFromRight(168);
+            takeButton(assign, mainAssign, 80, 28);
+            takeButton(assign, monoAssign, 80, 28);
             sourceLabel.setBounds(configInner.removeFromTop(16));
-            sourceBox.setBounds(configInner.removeFromTop(26).reduced(0, 1));
-            auto assign = configInner.removeFromTop(32);
-            takeButton(assign, mainAssign, 76, 28);
-            takeButton(assign, monoAssign, 76, 28);
-            placeKnobAndButton(delayArea.reduced(8, 6), delayTime, delayOn);
+            sourceBox.setBounds(configInner.removeFromTop(28).reduced(0, 1));
+
+            const int columnWidth = body.getWidth() / 3;
+            auto preampArea = body.removeFromLeft(columnWidth).reduced(3);
+            auto delayArea = body.removeFromLeft(columnWidth).reduced(3);
+            auto dcaArea = body.reduced(3);
+            preampBox.setBounds(preampArea);
+            delayBox.setBounds(delayArea);
+
+            auto stackKnob = [](juce::Rectangle<int> inner, UnitSlider* knob, juce::Component* button)
+            {
+                inner.removeFromTop(16);
+                auto buttonRow = inner.removeFromBottom(juce::jmin(44, inner.getHeight() / 4));
+
+                if (button != nullptr)
+                    button->setBounds(buttonRow.withSizeKeepingCentre(juce::jmin(96, buttonRow.getWidth()), 28));
+
+                if (knob != nullptr)
+                    knob->setBounds(inner.reduced(4, 0));
+            };
+
+            auto preampInner = preampArea.reduced(8, 6);
+            preampInner.removeFromTop(16);
+            auto preampButtons = preampInner.removeFromBottom(juce::jmin(44, preampInner.getHeight() / 4));
+
+            if (polarity != nullptr)
+                polarity->setBounds(preampButtons.removeFromLeft(preampButtons.getWidth() / 2).reduced(2, 8));
+
+            if (phantom != nullptr)
+                phantom->setBounds(preampButtons.reduced(2, 8));
+
+            if (trim != nullptr)
+                trim->setBounds(preampInner.reduced(4, 0));
+
+            stackKnob(delayArea.reduced(8, 6), delayTime, delayOn);
+
+            if (groupPad != nullptr)
+                groupPad->setBounds(dcaArea.reduced(4, 2));
         }
         else if (page == Page::eq)
         {
@@ -1878,6 +2096,7 @@ private:
 
         trim->setVisible(channel);
         polarity->setVisible(channel);
+        phantom->setVisible(channel);
         preampBox.setVisible(channel);
         configBox.setVisible(channel);
         delayBox.setVisible(channel);
@@ -1942,6 +2161,12 @@ private:
         if (sendsBoard != nullptr)
             sendsBoard->setVisible(sends);
 
+        if (groupPad != nullptr)
+            groupPad->setVisible(channel);
+
+        if (busSends != nullptr)
+            busSends->setVisible(channel);
+
         styleTabs();
         resized();
     }
@@ -1985,6 +2210,8 @@ private:
     juce::TextButton pasteButton { "Paste" };
     ChannelIconButton channelIcon;
     std::unique_ptr<SendsBoard> sendsBoard;
+    std::unique_ptr<GroupPad> groupPad;
+    std::unique_ptr<BusSendColumn> busSends;
     juce::TextButton homeTab { "Channel" };
     juce::TextButton eqTab { "EQ" };
     juce::TextButton dynTab { "Dyn" };
@@ -1992,6 +2219,7 @@ private:
 
     UnitSlider* trim = nullptr;
     FlagButton* polarity = nullptr;
+    FlagButton* phantom = nullptr;
     FlagButton* hpfOn = nullptr;
     FlagButton* eqOn = nullptr;
     UnitSlider* hpfFreq = nullptr;
@@ -2075,6 +2303,302 @@ void ChannelEditor::setSourceNames(const juce::StringArray& names)
 }
 
 void ChannelEditor::resized()
+{
+    surface->setBounds(getLocalBounds());
+}
+
+class MatrixEditor::Surface : public juce::Component
+{
+public:
+    enum class Page { home, eq, dyn };
+
+    explicit Surface(ConsoleModel& modelToUse)
+        : model(modelToUse),
+          eqGraph(modelToUse),
+          gateGraph(modelToUse, DynamicsGraph::Kind::gate),
+          compGraph(modelToUse, DynamicsGraph::Kind::compressor)
+    {
+        for (auto* tab : { &homeTab, &eqTab, &dynTab })
+        {
+            tab->setClickingTogglesState(false);
+            tab->setColour(juce::TextButton::buttonColourId, juce::Colour(0xff232830));
+            tab->setColour(juce::TextButton::textColourOffId, text());
+            addAndMakeVisible(*tab);
+        }
+
+        homeTab.onClick = [this] { show(Page::home); };
+        eqTab.onClick = [this] { show(Page::eq); };
+        dynTab.onClick = [this] { show(Page::dyn); };
+
+        title.setFont(juce::Font(juce::FontOptions(16.0f)));
+        title.setColour(juce::Label::textColourId, text());
+        addAndMakeVisible(title);
+
+        insert.setClickingTogglesState(true);
+        insert.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xff3d6f8f));
+        insert.setTooltip("Put the EQ, gate, and compressor before or after this matrix fader");
+        insert.onClick = [this]
+        {
+            model.setInt(root + "/insert/pos", insert.getToggleState() ? 1 : 0);
+            insert.setButtonText(insert.getToggleState() ? "Post Fader" : "Pre Fader");
+        };
+        addAndMakeVisible(insert);
+
+        groupPad = std::make_unique<GroupPad>(model);
+        addAndMakeVisible(*groupPad);
+
+        eqOn.setClickingTogglesState(true);
+        eqOn.setButtonText("EQ");
+        eqOn.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xff3d8f5a));
+        eqOn.onClick = [this] { model.setInt(root + "/eq/on", eqOn.getToggleState() ? 1 : 0); };
+        addAndMakeVisible(eqOn);
+        addAndMakeVisible(eqGraph);
+
+        gateOn.setClickingTogglesState(true);
+        gateOn.setButtonText("Gate");
+        gateOn.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xffe07a7a));
+        gateOn.onClick = [this] { model.setInt(root + "/gate/on", gateOn.getToggleState() ? 1 : 0); };
+        addAndMakeVisible(gateOn);
+        addAndMakeVisible(gateGraph);
+
+        compOn.setClickingTogglesState(true);
+        compOn.setButtonText("Comp");
+        compOn.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xffe0b040));
+        compOn.onClick = [this] { model.setInt(root + "/dyn/on", compOn.getToggleState() ? 1 : 0); };
+        addAndMakeVisible(compOn);
+        addAndMakeVisible(compGraph);
+
+        auto addKnob = [this](const juce::String& name, const juce::String& leaf, std::function<juce::String(float)> format)
+        {
+            auto slider = std::make_unique<UnitSlider>(
+                name,
+                [this, leaf]
+                {
+                    float value = 0.0f;
+                    model.getFloat(root + "/" + leaf, value);
+                    return value;
+                },
+                [this, leaf](float value) { model.setFloat(root + "/" + leaf, value); },
+                std::move(format));
+            addAndMakeVisible(*slider);
+            knobs.push_back(std::move(slider));
+            return knobs.back().get();
+        };
+
+        const auto ms = [](float value) { return juce::String(value, 0); };
+        gateAttack = addKnob("Attack", "gate/attack", ms);
+        gateHold = addKnob("Hold", "gate/hold", ms);
+        gateRelease = addKnob("Release", "gate/release", ms);
+        compKnee = addKnob("Knee", "dyn/knee", [](float value) { return juce::String(compKneeDb(value), 1); });
+        compMakeup = addKnob("Gain", "dyn/mgain", [](float value) { return decibelText(compMakeupDb(value)); });
+        compAttack = addKnob("Attack", "dyn/attack", ms);
+        compHold = addKnob("Hold", "dyn/hold", ms);
+        compRelease = addKnob("Release", "dyn/release", ms);
+
+        setMatrix(0);
+        show(Page::home);
+    }
+
+    void setMatrix(int matrixIndex)
+    {
+        index = juce::jlimit(0, numMatrices - 1, matrixIndex);
+        root = "/mtx/" + number();
+        title.setText("Mtx " + juce::String(index + 1), juce::dontSendNotification);
+        eqGraph.setTarget(root, numEqBands, false);
+        gateGraph.setPathRoot(root);
+        compGraph.setPathRoot(root);
+        groupPad->setRoot(root);
+        refresh();
+    }
+
+    void refresh()
+    {
+        if (! insert.isMouseButtonDown())
+        {
+            int post = 0;
+            model.getInt(root + "/insert/pos", post);
+            insert.setToggleState(post != 0, juce::dontSendNotification);
+            insert.setButtonText(post != 0 ? "Post Fader" : "Pre Fader");
+        }
+
+        if (! eqOn.isMouseButtonDown())
+        {
+            int enabled = 1;
+            model.getInt(root + "/eq/on", enabled);
+            eqOn.setToggleState(enabled != 0, juce::dontSendNotification);
+        }
+
+        if (! gateOn.isMouseButtonDown())
+        {
+            int enabled = 0;
+            model.getInt(root + "/gate/on", enabled);
+            gateOn.setToggleState(enabled != 0, juce::dontSendNotification);
+        }
+
+        if (! compOn.isMouseButtonDown())
+        {
+            int enabled = 0;
+            model.getInt(root + "/dyn/on", enabled);
+            compOn.setToggleState(enabled != 0, juce::dontSendNotification);
+        }
+
+        for (auto* knob : { gateAttack, gateHold, gateRelease, compKnee, compMakeup, compAttack, compHold, compRelease })
+            if (knob != nullptr)
+                knob->refresh();
+
+        groupPad->refresh();
+        eqGraph.repaint();
+        gateGraph.repaint();
+        compGraph.repaint();
+        repaint();
+    }
+
+    void paint(juce::Graphics& g) override
+    {
+        g.fillAll(panel());
+        int stored = index % 8;
+        model.getInt(root + "/config/color", stored);
+        g.setColour(stripColourFrom(stored));
+        g.fillRect(0, 0, getWidth(), 4);
+        g.drawRoundedRectangle(getLocalBounds().toFloat().reduced(1.0f), 8.0f, 2.0f);
+    }
+
+    void resized() override
+    {
+        auto area = getLocalBounds().reduced(8, 8);
+        area.removeFromTop(6);
+        auto tabs = area.removeFromTop(28);
+        const int tabWidth = 88;
+
+        for (auto* tab : { &homeTab, &eqTab, &dynTab })
+            tab->setBounds(tabs.removeFromLeft(tabWidth).reduced(2, 0));
+
+        area.removeFromTop(6);
+        const bool home = page == Page::home;
+        const bool equaliser = page == Page::eq;
+        const bool dynamics = page == Page::dyn;
+
+        title.setVisible(home);
+        insert.setVisible(home);
+        groupPad->setVisible(home);
+        eqOn.setVisible(equaliser);
+        eqGraph.setVisible(equaliser);
+        gateOn.setVisible(dynamics);
+        gateGraph.setVisible(dynamics);
+        compOn.setVisible(dynamics);
+        compGraph.setVisible(dynamics);
+
+        for (auto* knob : { gateAttack, gateHold, gateRelease })
+            if (knob != nullptr)
+                knob->setVisible(dynamics);
+
+        for (auto* knob : { compKnee, compMakeup, compAttack, compHold, compRelease })
+            if (knob != nullptr)
+                knob->setVisible(dynamics);
+
+        if (home)
+        {
+            auto header = area.removeFromTop(32);
+            title.setBounds(header.removeFromLeft(120));
+            insert.setBounds(header.removeFromLeft(120).reduced(4, 2));
+            groupPad->setBounds(area.reduced(4, 4));
+        }
+        else if (equaliser)
+        {
+            eqOn.setBounds(area.removeFromTop(28).removeFromLeft(72));
+            eqGraph.setBounds(area.reduced(2, 4));
+        }
+        else if (dynamics)
+        {
+            auto left = area.removeFromLeft(area.getWidth() / 2).reduced(3);
+            auto right = area.reduced(3);
+            auto gateButtons = left.removeFromTop(28);
+            gateOn.setBounds(gateButtons.removeFromLeft(72));
+            auto gateKnobs = left.removeFromBottom(juce::jmin(92, left.getHeight() / 3));
+            gateGraph.setBounds(left.reduced(2));
+            const int gateWidth = gateKnobs.getWidth() / 3;
+            gateAttack->setBounds(gateKnobs.removeFromLeft(gateWidth));
+            gateHold->setBounds(gateKnobs.removeFromLeft(gateWidth));
+            gateRelease->setBounds(gateKnobs);
+
+            auto compButtons = right.removeFromTop(28);
+            compOn.setBounds(compButtons.removeFromLeft(72));
+            auto compKnobs = right.removeFromBottom(juce::jmin(92, right.getHeight() / 3));
+            compGraph.setBounds(right.reduced(2));
+            const int compWidth = compKnobs.getWidth() / 5;
+            compKnee->setBounds(compKnobs.removeFromLeft(compWidth));
+            compMakeup->setBounds(compKnobs.removeFromLeft(compWidth));
+            compAttack->setBounds(compKnobs.removeFromLeft(compWidth));
+            compHold->setBounds(compKnobs.removeFromLeft(compWidth));
+            compRelease->setBounds(compKnobs);
+        }
+
+        for (auto* tab : { &homeTab, &eqTab, &dynTab })
+        {
+            const bool on = (tab == &homeTab && home) || (tab == &eqTab && equaliser) || (tab == &dynTab && dynamics);
+            tab->setColour(juce::TextButton::buttonColourId, on ? juce::Colour(0xff3d6f8f) : juce::Colour(0xff232830));
+        }
+    }
+
+private:
+    void show(Page next)
+    {
+        page = next;
+        resized();
+    }
+
+    juce::String number() const
+    {
+        return juce::String(index + 1).paddedLeft('0', 2);
+    }
+
+    ConsoleModel& model;
+    int index = 0;
+    juce::String root;
+    Page page = Page::home;
+    juce::TextButton homeTab { "Home" };
+    juce::TextButton eqTab { "EQ" };
+    juce::TextButton dynTab { "Dyn" };
+    juce::Label title;
+    juce::TextButton insert { "Pre Fader" };
+    std::unique_ptr<GroupPad> groupPad;
+    juce::TextButton eqOn { "EQ" };
+    EqGraph eqGraph;
+    juce::TextButton gateOn { "Gate" };
+    juce::TextButton compOn { "Comp" };
+    DynamicsGraph gateGraph;
+    DynamicsGraph compGraph;
+    UnitSlider* gateAttack = nullptr;
+    UnitSlider* gateHold = nullptr;
+    UnitSlider* gateRelease = nullptr;
+    UnitSlider* compKnee = nullptr;
+    UnitSlider* compMakeup = nullptr;
+    UnitSlider* compAttack = nullptr;
+    UnitSlider* compHold = nullptr;
+    UnitSlider* compRelease = nullptr;
+    std::vector<std::unique_ptr<UnitSlider>> knobs;
+};
+
+MatrixEditor::MatrixEditor(ConsoleModel& modelToUse)
+    : model(modelToUse),
+      surface(std::make_unique<Surface>(model))
+{
+    addAndMakeVisible(*surface);
+}
+
+MatrixEditor::~MatrixEditor() = default;
+
+void MatrixEditor::setMatrix(int matrixIndex)
+{
+    surface->setMatrix(matrixIndex);
+}
+
+void MatrixEditor::refresh()
+{
+    surface->refresh();
+}
+
+void MatrixEditor::resized()
 {
     surface->setBounds(getLocalBounds());
 }

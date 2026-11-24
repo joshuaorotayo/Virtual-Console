@@ -107,15 +107,29 @@ class GroupDsp
 public:
     void prepare(double newSampleRate);
     void configure(const MixPoint& point) noexcept;
+    void configureGate(const Dynamics& gate) noexcept;
     void process(float& left, float& right) noexcept;
 
 private:
+    float gateGain(float key) noexcept;
     float compressorGain(float key) noexcept;
 
     double sampleRate = 48000.0;
     ChannelDsp::Biquad eqL[numEqBands];
     ChannelDsp::Biquad eqR[numEqBands];
     bool eqEnabled = true;
+    bool gateEnabled = false;
+    int gateMode = 0;
+    float gateThreshold = 0.1f;
+    float gateThresholdDb = -80.0f;
+    float gateRangeDb = 30.0f;
+    float gateFloor = 0.001f;
+    float gateAttack = 1.0f;
+    float gateRelease = 1.0f;
+    int gateHoldSamples = 0;
+    int gateHoldLeft = 0;
+    float gateEnvelope = 0.0f;
+    float gateLevel = 1.0f;
     bool compEnabled = false;
     int compMode = 0;
     bool compPre = false;

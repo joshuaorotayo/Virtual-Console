@@ -9,11 +9,9 @@
 namespace vc
 {
 
-class StripBank;
-class BusBank;
-class MatrixBank;
-class MatrixSendPanel;
+class FaderBay;
 class GroupEditor;
+class MatrixEditor;
 
 class TransportButton : public juce::Button
 {
@@ -54,6 +52,8 @@ private:
     void selectChannel (int channelIndex);
     void selectBus (int busIndex);
     void selectMatrix (int matrixIndex);
+    void selectSpare (int kind, int index);
+    void showBank (int bank);
     void removeSourceById (int sourceId);
     void syncTransport();
     juce::String statusText();
@@ -74,6 +74,7 @@ private:
     juce::TextButton sourcesButton { "Sources" };
     juce::TextButton busesButton { "Buses" };
     juce::TextButton matricesButton { "Matrices" };
+    juce::TextButton dcasButton { "DCAs" };
     juce::Label mixLabel { {}, "Mix" };
     juce::ComboBox mixBox;
     juce::Label outputLabel { {}, "Output" };
@@ -90,12 +91,12 @@ private:
     juce::Label emptySources { {}, "No sources yet. Add a file and it lands on the first free local input or aux. Choose that input from Config." };
     std::unique_ptr<SourceList> sourceModel;
     juce::ListBox sourceList { "Sources", nullptr };
-    std::unique_ptr<StripBank> strips;
-    std::unique_ptr<BusBank> buses;
-    std::unique_ptr<MatrixBank> matrices;
-    std::unique_ptr<MatrixSendPanel> matrixSends;
+    std::unique_ptr<FaderBay> faderBay;
     std::unique_ptr<ChannelEditor> channelEditor;
+    std::unique_ptr<MatrixEditor> matrixEditor;
     std::unique_ptr<GroupEditor> groupEditor;
+    juce::TextButton bankButton[5];
+    juce::Label spareTitle;
     juce::Viewport viewport;
     juce::Label mainLabel { {}, "MAIN" };
     MeterView mainMeter;
@@ -107,6 +108,7 @@ private:
     FaderScale centerScale { centerFader };
     juce::TextButton centerMute { "M" };
     juce::TextButton centerStereo { "ST" };
+    juce::TextButton muteGroupButton[numMuteGroups];
     juce::Label status;
     std::unique_ptr<juce::FileChooser> chooser;
     std::vector<OutputChoice> outputs;
@@ -114,6 +116,11 @@ private:
     bool sourcesOpen = false;
     bool busesOpen = false;
     bool matricesOpen = false;
+    bool dcasOpen = false;
+    int faderBank = 0;
+    int topEditor = 0;
+    int spareKind = 0;
+    int spareIndex = 0;
     int selectedChannel = 0;
     int selectedBus = 0;
     int selectedMatrix = 0;

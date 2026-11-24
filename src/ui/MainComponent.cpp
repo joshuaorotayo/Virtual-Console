@@ -1,4 +1,6 @@
 #include "ui/MainComponent.h"
+#include "ui/GroupPad.h"
+#include "ui/StripColour.h"
 
 #include "model/DspLaw.h"
 #include "model/FaderLaw.h"
@@ -79,18 +81,47 @@ private:
     std::array<std::unique_ptr<ChannelStrip>, numChannels> strips;
 };
 
+class StripName : public juce::Label
+{
+public:
+    std::function<void()> onSelect;
+
+    StripName()
+    {
+        setEditable(false, true, false);
+        setJustificationType(juce::Justification::centred);
+        setColour(juce::Label::backgroundColourId, juce::Colour(0xff232830));
+        setColour(juce::Label::textColourId, text());
+        setColour(juce::Label::backgroundWhenEditingColourId, juce::Colour(0xff1c2128));
+    }
+
+    void mouseDown(const juce::MouseEvent& event) override
+    {
+        if (event.getNumberOfClicks() == 1 && onSelect != nullptr)
+            onSelect();
+
+        juce::Label::mouseDown(event);
+    }
+};
+
 class BusStrip : public juce::Component
 {
 public:
     BusStrip (ConsoleModel& modelToUse, int busIndex)
         : model (modelToUse), index (busIndex), scale (fader)
     {
-        scribble.setButtonText ("Bus " + juce::String (index + 1));
-        scribble.setColour (juce::TextButton::buttonColourId, juce::Colour (0xff232830));
-        scribble.setColour (juce::TextButton::textColourOffId, text());
-        scribble.setTooltip ("Edit this bus");
-        scribble.onClick = [this] { if (onSelect != nullptr) onSelect(); };
+        scribble.setText (model.getBusName (index), juce::dontSendNotification);
+        scribble.setTooltip ("Double-click to rename this bus");
+        scribble.onSelect = [this] { if (onSelect != nullptr) onSelect(); };
+        scribble.onTextChange = [this] { model.setBusName (index, scribble.getText()); };
         addAndMakeVisible (scribble);
+        colourIcon.setTooltip ("Double-click to choose this bus colour");
+        colourIcon.onClick = [this] { if (onSelect != nullptr) onSelect(); };
+        colourIcon.onDoubleClick = [this]
+        {
+            openStripColourPicker (colourIcon, model, leaf ("config/color"), [this] { refresh(); });
+        };
+        addAndMakeVisible (colourIcon);
 
         pan.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
         pan.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
@@ -117,6 +148,7 @@ public:
         fader.onValueChange = [this] { model.setFloat (leaf ("mix/fader"), (float) fader.getValue()); };
         addAndMakeVisible (fader);
         addAndMakeVisible (scale);
+        scale.onPressed = [this] { if (onSelect != nullptr) onSelect(); };
 
         mute.setClickingTogglesState (true);
         mute.setColour (juce::TextButton::buttonOnColourId, muteOn());
@@ -167,6 +199,14 @@ public:
             model.getInt (leaf ("mix/mono"), assigned);
             toMono.setToggleState (assigned != 0, juce::dontSendNotification);
         }
+
+        if (! scribble.isBeingEdited() && scribble.getText() != model.getBusName (index))
+            scribble.setText (model.getBusName (index), juce::dontSendNotification);
+
+        int colour = index % 8;
+        model.getInt (leaf ("config/color"), colour);
+        colourIcon.setStored (colour);
+        scribble.setColour (juce::Label::textColourId, stripNameColour (colour));
     }
 
     void paint (juce::Graphics& g) override
@@ -175,12 +215,14 @@ public:
         auto bounds = getLocalBounds().reduced (3).toFloat();
         g.setColour (juce::Colour (0xff2a313a));
         g.fillRoundedRectangle (bounds, 6.0f);
-        g.setColour (juce::Colour (0xff7eb6d6));
+        int colour = index % 8;
+        model.getInt (leaf ("config/color"), colour);
+        g.setColour (stripColourFrom (colour));
         g.fillRoundedRectangle (8.0f, 8.0f, (float) getWidth() - 16.0f, 4.0f, 2.0f);
 
         if (selected)
         {
-            g.setColour (juce::Colour (0xff7eb6d6));
+            g.setColour (stripColourFrom (colour));
             g.drawRoundedRectangle (bounds, 6.0f, 2.0f);
         }
     }
@@ -189,7 +231,9 @@ public:
     {
         auto area = getLocalBounds().reduced (5);
         area.removeFromTop (12);
-        scribble.setBounds (area.removeFromTop (28).reduced (2, 0));
+        auto nameRow = area.removeFromTop (28);
+        colourIcon.setBounds (nameRow.removeFromLeft (28).reduced (1, 1));
+        scribble.setBounds (nameRow.reduced (2, 0));
         pan.setBounds (area.removeFromTop (46).withSizeKeepingCentre (44, 44));
         auto buttons = area.removeFromBottom (26);
         mute.setBounds (buttons.removeFromLeft (34).reduced (1, 0));
@@ -204,6 +248,12 @@ public:
     {
         selected = shouldSelect;
         repaint();
+    }
+
+    void mouseDown (const juce::MouseEvent& event) override
+    {
+        if (event.originalComponent == this && onSelect != nullptr)
+            onSelect();
     }
 
     std::function<void()> onSelect;
@@ -233,7 +283,8 @@ private:
     ConsoleModel& model;
     int index = 0;
     bool selected = false;
-    juce::TextButton scribble;
+    StripName scribble;
+    ColourIcon colourIcon;
     juce::Slider pan;
     ConsoleFader fader;
     FaderScale scale;
@@ -298,6 +349,13 @@ public:
         scribble.setTooltip ("Edit this matrix");
         scribble.onClick = [this] { if (onSelect != nullptr) onSelect(); };
         addAndMakeVisible (scribble);
+        colourIcon.setTooltip ("Double-click to choose this matrix colour");
+        colourIcon.onClick = [this] { if (onSelect != nullptr) onSelect(); };
+        colourIcon.onDoubleClick = [this]
+        {
+            openStripColourPicker (colourIcon, model, leaf ("config/color"), [this] { refresh(); });
+        };
+        addAndMakeVisible (colourIcon);
 
         fader.setSliderStyle (juce::Slider::LinearVertical);
         fader.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 46, 16);
@@ -315,6 +373,7 @@ public:
         fader.onValueChange = [this] { model.setFloat (leaf ("mix/fader"), (float) fader.getValue()); };
         addAndMakeVisible (fader);
         addAndMakeVisible (scale);
+        scale.onPressed = [this] { if (onSelect != nullptr) onSelect(); };
 
         mute.setClickingTogglesState (true);
         mute.setColour (juce::TextButton::buttonOnColourId, muteOn());
@@ -336,6 +395,11 @@ public:
             model.getInt (leaf ("mix/on"), enabled);
             mute.setToggleState (enabled == 0, juce::dontSendNotification);
         }
+
+        int colour = index % 8;
+        model.getInt (leaf ("config/color"), colour);
+        colourIcon.setStored (colour);
+        scribble.setColour (juce::TextButton::textColourOffId, stripNameColour (colour));
     }
 
     void paint (juce::Graphics& g) override
@@ -344,12 +408,14 @@ public:
         auto bounds = getLocalBounds().reduced (3).toFloat();
         g.setColour (juce::Colour (0xff2a313a));
         g.fillRoundedRectangle (bounds, 6.0f);
-        g.setColour (juce::Colour (0xffd27ad4));
+        int colour = index % 8;
+        model.getInt (leaf ("config/color"), colour);
+        g.setColour (stripColourFrom (colour));
         g.fillRoundedRectangle (8.0f, 8.0f, (float) getWidth() - 16.0f, 4.0f, 2.0f);
 
         if (selected)
         {
-            g.setColour (juce::Colour (0xffd27ad4));
+            g.setColour (stripColourFrom (colour));
             g.drawRoundedRectangle (bounds, 6.0f, 2.0f);
         }
     }
@@ -358,7 +424,9 @@ public:
     {
         auto area = getLocalBounds().reduced (5);
         area.removeFromTop (12);
-        scribble.setBounds (area.removeFromTop (28).reduced (2, 0));
+        auto nameRow = area.removeFromTop (28);
+        colourIcon.setBounds (nameRow.removeFromLeft (28).reduced (1, 1));
+        scribble.setBounds (nameRow.reduced (2, 0));
         auto buttons = area.removeFromBottom (26);
         mute.setBounds (buttons.reduced (28, 0));
         area.removeFromBottom (2);
@@ -370,6 +438,12 @@ public:
     {
         selected = shouldSelect;
         repaint();
+    }
+
+    void mouseDown (const juce::MouseEvent& event) override
+    {
+        if (event.originalComponent == this && onSelect != nullptr)
+            onSelect();
     }
 
     std::function<void()> onSelect;
@@ -391,6 +465,7 @@ private:
     int index = 0;
     bool selected = false;
     juce::TextButton scribble;
+    ColourIcon colourIcon;
     ConsoleFader fader;
     FaderScale scale;
     juce::TextButton mute { "M" };
@@ -777,6 +852,564 @@ void TransportButton::paintButton(juce::Graphics& g, bool highlighted, bool down
     g.fillPath(triangle);
 }
 
+class DcaStrip : public juce::Component
+{
+public:
+    DcaStrip (ConsoleModel& modelToUse, int dcaIndex)
+        : model (modelToUse), index (dcaIndex), scale (fader)
+    {
+        scribble.setButtonText ("DCA " + juce::String (index + 1));
+        scribble.setColour (juce::TextButton::buttonColourId, juce::Colour (0xff232830));
+        scribble.setColour (juce::TextButton::textColourOffId, text());
+        scribble.setInterceptsMouseClicks (false, false);
+        addAndMakeVisible (scribble);
+
+        fader.setSliderStyle (juce::Slider::LinearVertical);
+        fader.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 46, 16);
+        fader.setRange (0.0, 1.0, 0.0);
+        fader.setScrollWheelEnabled (false);
+        fader.setDoubleClickReturnValue (true, 0.75);
+        fader.textFromValueFunction = [] (double value) { return decibelText (faderToDb ((float) value)); };
+        fader.valueFromTextFunction = [] (const juce::String& text)
+        {
+            if (text.containsIgnoreCase ("inf"))
+                return 0.0;
+
+            return (double) dbToFader (text.getFloatValue());
+        };
+        fader.onValueChange = [this] { model.setFloat (path ("fader"), (float) fader.getValue()); };
+        fader.setTooltip ("DCA level. 0 dB leaves assigned strips at their own faders");
+        addAndMakeVisible (fader);
+        addAndMakeVisible (scale);
+        scale.onPressed = [this] { if (onSelect != nullptr) onSelect(); };
+
+        mute.setClickingTogglesState (true);
+        mute.setColour (juce::TextButton::buttonOnColourId, muteOn());
+        mute.setTooltip ("Mute every strip assigned to this DCA");
+        mute.onClick = [this] { model.setInt (path ("on"), mute.getToggleState() ? 0 : 1); };
+        addAndMakeVisible (mute);
+
+        solo.setClickingTogglesState (true);
+        solo.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xffd2b84a));
+        solo.setTooltip ("Solo the assigned strips after their faders");
+        solo.onClick = [this] { model.setInt (path ("solo"), solo.getToggleState() ? 1 : 0); };
+        addAndMakeVisible (solo);
+        refresh();
+    }
+
+    void refresh()
+    {
+        if (! fader.isMouseButtonDown())
+        {
+            float value = 0.75f;
+            model.getFloat (path ("fader"), value);
+            fader.setValue (value, juce::dontSendNotification);
+        }
+
+        if (! mute.isMouseButtonDown())
+        {
+            int enabled = 1;
+            model.getInt (path ("on"), enabled);
+            mute.setToggleState (enabled == 0, juce::dontSendNotification);
+        }
+
+        if (! solo.isMouseButtonDown())
+        {
+            int enabled = 0;
+            model.getInt (path ("solo"), enabled);
+            solo.setToggleState (enabled != 0, juce::dontSendNotification);
+        }
+    }
+
+    void paint (juce::Graphics& g) override
+    {
+        g.fillAll (background());
+        auto bounds = getLocalBounds().reduced (3).toFloat();
+        g.setColour (juce::Colour (0xff2a313a));
+        g.fillRoundedRectangle (bounds, 6.0f);
+        g.setColour (juce::Colour (0xffd2b84a));
+        g.fillRoundedRectangle (8.0f, 8.0f, (float) getWidth() - 16.0f, 4.0f, 2.0f);
+    }
+
+    void resized() override
+    {
+        auto area = getLocalBounds().reduced (5);
+        area.removeFromTop (12);
+        scribble.setBounds (area.removeFromTop (28).reduced (2, 0));
+        auto buttons = area.removeFromBottom (26);
+        mute.setBounds (buttons.removeFromLeft (buttons.getWidth() / 2).reduced (1, 0));
+        solo.setBounds (buttons.reduced (1, 0));
+        area.removeFromBottom (2);
+        scale.setBounds (area.removeFromLeft (36));
+        fader.setBounds (area.reduced (1, 0));
+    }
+
+    void mouseDown (const juce::MouseEvent& event) override
+    {
+        if (event.originalComponent == this && onSelect != nullptr)
+            onSelect();
+    }
+
+    std::function<void()> onSelect;
+
+private:
+    juce::String path (const char* leaf) const
+    {
+        return "/dca/" + juce::String (index + 1).paddedLeft ('0', 2) + "/" + leaf;
+    }
+
+    ConsoleModel& model;
+    int index = 0;
+    juce::TextButton scribble;
+    ConsoleFader fader;
+    FaderScale scale;
+    juce::TextButton mute { "M" };
+    juce::TextButton solo { "S" };
+};
+
+class DcaBank : public juce::Component
+{
+public:
+    static constexpr int stripWidth = 112;
+
+    explicit DcaBank (ConsoleModel& model)
+    {
+        for (int i = 0; i < numDcas; ++i)
+        {
+            strips[(size_t) i] = std::make_unique<DcaStrip> (model, i);
+            addAndMakeVisible (*strips[(size_t) i]);
+        }
+    }
+
+    void refresh()
+    {
+        for (auto& strip : strips)
+            strip->refresh();
+    }
+
+    void resized() override
+    {
+        for (int i = 0; i < numDcas; ++i)
+            strips[(size_t) i]->setBounds (i * stripWidth, 0, stripWidth, getHeight());
+    }
+
+    int widthForDcas() const { return stripWidth * numDcas; }
+
+private:
+    std::array<std::unique_ptr<DcaStrip>, numDcas> strips;
+};
+
+class SpareStrip : public juce::Component
+{
+public:
+    SpareStrip(ConsoleModel& modelToUse, const juce::String& pathRoot, const juce::String& name)
+        : model(modelToUse), root(pathRoot), scale(fader)
+    {
+        scribble.setButtonText(name);
+        scribble.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff232830));
+        scribble.setColour(juce::TextButton::textColourOffId, text());
+        scribble.setInterceptsMouseClicks(false, false);
+        addAndMakeVisible(scribble);
+
+        fader.setSliderStyle(juce::Slider::LinearVertical);
+        fader.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 46, 16);
+        fader.setRange(0.0, 1.0, 0.0);
+        fader.setScrollWheelEnabled(false);
+        fader.setDoubleClickReturnValue(true, 0.75);
+        fader.textFromValueFunction = [](double value) { return decibelText(faderToDb((float) value)); };
+        fader.valueFromTextFunction = [](const juce::String& textValue)
+        {
+            if (textValue.containsIgnoreCase("inf"))
+                return 0.0;
+
+            return (double) dbToFader(textValue.getFloatValue());
+        };
+        fader.onValueChange = [this] { model.setFloat(root + "/mix/fader", (float) fader.getValue()); };
+        addAndMakeVisible(fader);
+        addAndMakeVisible(scale);
+        scale.onPressed = [this] { if (onSelect != nullptr) onSelect(); };
+
+        mute.setClickingTogglesState(true);
+        mute.setColour(juce::TextButton::buttonOnColourId, muteOn());
+        mute.setTooltip("Mute");
+        mute.onClick = [this] { model.setInt(root + "/mix/on", mute.getToggleState() ? 0 : 1); };
+        addAndMakeVisible(mute);
+        refresh();
+    }
+
+    void refresh()
+    {
+        if (! fader.isMouseButtonDown())
+        {
+            float value = 0.75f;
+            model.getFloat(root + "/mix/fader", value);
+            fader.setValue(value, juce::dontSendNotification);
+        }
+
+        if (! mute.isMouseButtonDown())
+        {
+            int enabled = 1;
+            model.getInt(root + "/mix/on", enabled);
+            mute.setToggleState(enabled == 0, juce::dontSendNotification);
+        }
+    }
+
+    void setSelected(bool shouldSelect)
+    {
+        selected = shouldSelect;
+        repaint();
+    }
+
+    void mouseDown(const juce::MouseEvent& event) override
+    {
+        if (event.originalComponent == this && onSelect != nullptr)
+            onSelect();
+    }
+
+    void paint(juce::Graphics& g) override
+    {
+        g.fillAll(background());
+        auto bounds = getLocalBounds().reduced(3).toFloat();
+        g.setColour(juce::Colour(0xff2a313a));
+        g.fillRoundedRectangle(bounds, 6.0f);
+        g.setColour(juce::Colour(0xff7af4f8));
+        g.fillRoundedRectangle(8.0f, 8.0f, (float) getWidth() - 16.0f, 4.0f, 2.0f);
+
+        if (selected)
+        {
+            g.setColour(juce::Colour(0xff7af4f8));
+            g.drawRoundedRectangle(bounds, 6.0f, 2.0f);
+        }
+    }
+
+    void resized() override
+    {
+        auto area = getLocalBounds().reduced(5);
+        area.removeFromTop(12);
+        scribble.setBounds(area.removeFromTop(28).reduced(2, 0));
+        mute.setBounds(area.removeFromBottom(26).reduced(18, 0));
+        area.removeFromBottom(2);
+        scale.setBounds(area.removeFromLeft(36));
+        fader.setBounds(area.reduced(1, 0));
+    }
+
+    std::function<void()> onSelect;
+
+private:
+    ConsoleModel& model;
+    juce::String root;
+    bool selected = false;
+    juce::TextButton scribble;
+    ConsoleFader fader;
+    FaderScale scale;
+    juce::TextButton mute { "M" };
+};
+
+class FaderBay : public juce::Component
+{
+public:
+    enum class Bank { ch1, ch17, aux, busMtx, all, buses, matrices, dcas };
+
+    static constexpr int stripWidth = 112;
+
+    FaderBay(ConsoleModel& model, MixEngine& engine)
+    {
+        for (int i = 0; i < numChannels; ++i)
+        {
+            channels[(size_t) i] = std::make_unique<ChannelStrip>(model, engine, i);
+            addChildComponent(*channels[(size_t) i]);
+            channels[(size_t) i]->onSelect = [this, i] { if (onChannel != nullptr) onChannel(i); };
+        }
+
+        for (int i = 0; i < numAuxIns; ++i)
+        {
+            const auto path = "/auxin/" + juce::String(i + 1).paddedLeft('0', 2);
+            aux[(size_t) i] = std::make_unique<SpareStrip>(model, path, "Aux " + juce::String(i + 1));
+            addChildComponent(*aux[(size_t) i]);
+            aux[(size_t) i]->onSelect = [this, i] { if (onSpare != nullptr) onSpare(0, i); };
+        }
+
+        static const char* usbNames[] = { "USB L", "USB R" };
+
+        for (int i = 0; i < numUsbReturns; ++i)
+        {
+            const auto path = "/usb/" + juce::String(i + 1).paddedLeft('0', 2);
+            usb[(size_t) i] = std::make_unique<SpareStrip>(model, path, usbNames[i]);
+            addChildComponent(*usb[(size_t) i]);
+            usb[(size_t) i]->onSelect = [this, i] { if (onSpare != nullptr) onSpare(1, i); };
+        }
+
+        for (int i = 0; i < numFxReturns; ++i)
+        {
+            const auto path = "/fxrtn/" + juce::String(i + 1).paddedLeft('0', 2);
+            const auto name = "FX" + juce::String(i / 2 + 1) + (i % 2 == 0 ? " L" : " R");
+            fx[(size_t) i] = std::make_unique<SpareStrip>(model, path, name);
+            addChildComponent(*fx[(size_t) i]);
+            fx[(size_t) i]->onSelect = [this, i] { if (onSpare != nullptr) onSpare(2, i); };
+        }
+
+        for (int i = 0; i < numDcas; ++i)
+        {
+            dcas[(size_t) i] = std::make_unique<DcaStrip>(model, i);
+            addChildComponent(*dcas[(size_t) i]);
+            dcas[(size_t) i]->onSelect = [this, i] { if (onSpare != nullptr) onSpare(3, i); };
+        }
+
+        for (int i = 0; i < numBuses; ++i)
+        {
+            buses[(size_t) i] = std::make_unique<BusStrip>(model, i);
+            addChildComponent(*buses[(size_t) i]);
+            buses[(size_t) i]->onSelect = [this, i] { if (onBus != nullptr) onBus(i); };
+        }
+
+        for (int i = 0; i < numMatrices; ++i)
+        {
+            matrices[(size_t) i] = std::make_unique<MatrixStrip>(model, i);
+            addChildComponent(*matrices[(size_t) i]);
+            matrices[(size_t) i]->onSelect = [this, i] { if (onMatrix != nullptr) onMatrix(i); };
+        }
+
+        setBank(Bank::ch1);
+    }
+
+    void setBank(Bank next)
+    {
+        bank = next;
+        visible.clear();
+
+        auto add = [this](juce::Component* component) { visible.push_back(component); };
+
+        auto addChannels = [&](int first, int last)
+        {
+            for (int i = first; i <= last; ++i)
+                add(channels[(size_t) i].get());
+        };
+
+        auto addAuxFx = [&](bool busesToo)
+        {
+            for (auto& strip : aux)
+                add(strip.get());
+
+            for (auto& strip : usb)
+                add(strip.get());
+
+            for (auto& strip : fx)
+                add(strip.get());
+
+            if (busesToo)
+                for (int i = 0; i < 4; ++i)
+                    add(buses[(size_t) i].get());
+        };
+
+        if (bank == Bank::ch1)
+            addChannels(0, 15);
+        else if (bank == Bank::ch17)
+            addChannels(16, 31);
+        else if (bank == Bank::aux)
+            addAuxFx(true);
+        else if (bank == Bank::busMtx)
+        {
+            for (auto& strip : buses)
+                add(strip.get());
+
+            for (auto& strip : matrices)
+                add(strip.get());
+        }
+        else if (bank == Bank::buses)
+        {
+            for (auto& strip : buses)
+                add(strip.get());
+        }
+        else if (bank == Bank::matrices)
+        {
+            for (auto& strip : matrices)
+                add(strip.get());
+        }
+        else if (bank == Bank::dcas)
+        {
+            for (auto& strip : dcas)
+                add(strip.get());
+        }
+        else
+        {
+            addChannels(0, 31);
+            addAuxFx(false);
+
+            for (auto& strip : dcas)
+                add(strip.get());
+
+            for (auto& strip : buses)
+                add(strip.get());
+
+            for (auto& strip : matrices)
+                add(strip.get());
+        }
+
+        for (auto& strip : channels)
+            strip->setVisible(false);
+
+        for (auto& strip : aux)
+            strip->setVisible(false);
+
+        for (auto& strip : usb)
+            strip->setVisible(false);
+
+        for (auto& strip : fx)
+            strip->setVisible(false);
+
+        for (auto& strip : dcas)
+            strip->setVisible(false);
+
+        for (auto& strip : buses)
+            strip->setVisible(false);
+
+        for (auto& strip : matrices)
+            strip->setVisible(false);
+
+        for (auto* strip : visible)
+            strip->setVisible(true);
+
+        resized();
+    }
+
+    void refresh()
+    {
+        for (auto& strip : channels)
+            strip->refresh();
+
+        for (auto& strip : aux)
+            strip->refresh();
+
+        for (auto& strip : usb)
+            strip->refresh();
+
+        for (auto& strip : fx)
+            strip->refresh();
+
+        for (auto& strip : dcas)
+            strip->refresh();
+
+        for (auto& strip : buses)
+            strip->refresh();
+
+        for (auto& strip : matrices)
+            strip->refresh();
+    }
+
+    void setSelectedChannel(int channel)
+    {
+        for (int i = 0; i < numChannels; ++i)
+            channels[(size_t) i]->setSelected(i == channel);
+
+        clearGroups();
+    }
+
+    void setSelectedBus(int bus)
+    {
+        for (int i = 0; i < numBuses; ++i)
+            buses[(size_t) i]->setSelected(i == bus);
+
+        for (auto& strip : channels)
+            strip->setSelected(false);
+
+        for (auto& strip : matrices)
+            strip->setSelected(false);
+
+        clearSpares();
+    }
+
+    void setSelectedMatrix(int matrix)
+    {
+        for (int i = 0; i < numMatrices; ++i)
+            matrices[(size_t) i]->setSelected(i == matrix);
+
+        for (auto& strip : channels)
+            strip->setSelected(false);
+
+        for (auto& strip : buses)
+            strip->setSelected(false);
+
+        clearSpares();
+    }
+
+    void setSelectedSpare(int kind, int index)
+    {
+        clearGroups();
+
+        for (auto& strip : channels)
+            strip->setSelected(false);
+
+        for (int i = 0; i < numAuxIns; ++i)
+            aux[(size_t) i]->setSelected(kind == 0 && i == index);
+
+        for (int i = 0; i < numUsbReturns; ++i)
+            usb[(size_t) i]->setSelected(kind == 1 && i == index);
+
+        for (int i = 0; i < numFxReturns; ++i)
+            fx[(size_t) i]->setSelected(kind == 2 && i == index);
+    }
+
+    int xFor(juce::Component* component) const
+    {
+        for (int i = 0; i < (int) visible.size(); ++i)
+            if (visible[(size_t) i] == component)
+                return i * stripWidth;
+
+        return 0;
+    }
+
+    ChannelStrip* channelStrip(int index) const { return channels[(size_t) index].get(); }
+    BusStrip* busStrip(int index) const { return buses[(size_t) index].get(); }
+    MatrixStrip* matrixStrip(int index) const { return matrices[(size_t) index].get(); }
+
+    int widthForBank() const { return stripWidth * juce::jmax(1, (int) visible.size()); }
+
+    void resized() override
+    {
+        for (int i = 0; i < (int) visible.size(); ++i)
+            visible[(size_t) i]->setBounds(i * stripWidth, 0, stripWidth, getHeight());
+    }
+
+    std::function<void(int)> onChannel;
+    std::function<void(int)> onBus;
+    std::function<void(int)> onMatrix;
+    std::function<void(int, int)> onSpare;
+
+private:
+    void clearGroups()
+    {
+        for (auto& strip : buses)
+            strip->setSelected(false);
+
+        for (auto& strip : matrices)
+            strip->setSelected(false);
+
+        clearSpares();
+    }
+
+    void clearSpares()
+    {
+        for (auto& strip : aux)
+            strip->setSelected(false);
+
+        for (auto& strip : usb)
+            strip->setSelected(false);
+
+        for (auto& strip : fx)
+            strip->setSelected(false);
+    }
+
+    Bank bank = Bank::ch1;
+    std::vector<juce::Component*> visible;
+    std::array<std::unique_ptr<ChannelStrip>, numChannels> channels;
+    std::array<std::unique_ptr<SpareStrip>, numAuxIns> aux;
+    std::array<std::unique_ptr<SpareStrip>, numUsbReturns> usb;
+    std::array<std::unique_ptr<SpareStrip>, numFxReturns> fx;
+    std::array<std::unique_ptr<DcaStrip>, numDcas> dcas;
+    std::array<std::unique_ptr<BusStrip>, numBuses> buses;
+    std::array<std::unique_ptr<MatrixStrip>, numMatrices> matrices;
+};
+
 class GroupEditor : public juce::Component
 {
 public:
@@ -785,6 +1418,13 @@ public:
     {
         title.setFont (juce::Font (juce::FontOptions (16.0f)));
         title.setColour (juce::Label::textColourId, text());
+        title.setColour (juce::Label::backgroundWhenEditingColourId, juce::Colour (0xff1c2128));
+        title.setEditable (false, true, false);
+        title.onTextChange = [this]
+        {
+            if (root.startsWith ("/bus/"))
+                model.setString (root + "/config/name", title.getText());
+        };
         addAndMakeVisible (title);
 
         for (auto* button : { &stripTarget, &stereoTarget, &centerTarget })
@@ -849,6 +1489,48 @@ public:
         setupComp (threshold, "thr", "Compressor threshold", 0.75);
         setupComp (ratio, "ratio", "Compressor ratio", 0.5);
         setupComp (makeup, "mgain", "Compressor makeup gain", 0.5);
+        groupPad = std::make_unique<GroupPad> (model);
+        addAndMakeVisible (*groupPad);
+
+        matrixHeading.setText ("To Matrix", juce::dontSendNotification);
+        matrixHeading.setColour (juce::Label::textColourId, dim());
+        matrixHeading.setFont (juce::Font (juce::FontOptions (12.0f)));
+        addAndMakeVisible (matrixHeading);
+
+        for (int matrix = 0; matrix < numMatrices; ++matrix)
+        {
+            auto& name = matrixName[(size_t) matrix];
+            name.setText ("Mtx " + juce::String (matrix + 1), juce::dontSendNotification);
+            name.setColour (juce::Label::textColourId, text());
+            name.setJustificationType (juce::Justification::centredLeft);
+            addAndMakeVisible (name);
+
+            auto& level = matrixLevel[(size_t) matrix];
+            level.setSliderStyle (juce::Slider::LinearHorizontal);
+            level.setTextBoxStyle (juce::Slider::TextBoxRight, false, 48, 16);
+            level.setRange (0.0, 1.0, 0.0);
+            level.setScrollWheelEnabled (false);
+            level.setDoubleClickReturnValue (true, 0.75);
+            level.textFromValueFunction = [] (double value) { return decibelText (faderToDb ((float) value)); };
+            level.onValueChange = [this, matrix]
+            {
+                if (! applyingMatrix)
+                    model.setFloat (matrixSendPath (matrix) + "/level", (float) matrixLevel[(size_t) matrix].getValue());
+            };
+            addAndMakeVisible (level);
+
+            auto& pre = matrixPre[(size_t) matrix];
+            pre.setButtonText ("Pre");
+            pre.setClickingTogglesState (true);
+            pre.setTooltip ("Send this bus to the matrix before the bus fader");
+            pre.onClick = [this, matrix]
+            {
+                if (! applyingMatrix)
+                    model.setInt (matrixSendPath (matrix) + "/tap", matrixPre[(size_t) matrix].getToggleState() ? 1 : 0);
+            };
+            addAndMakeVisible (pre);
+        }
+
         showStrip ("/bus/01", "Bus 1");
     }
 
@@ -865,7 +1547,22 @@ public:
         if (root.isEmpty())
             return;
 
-        title.setText (root == "/main/st" ? "Main LR" : root == "/main/m" ? "Center" : stripTitle, juce::dontSendNotification);
+        juce::String shown = root == "/main/st" ? "Main LR" : root == "/main/m" ? "Center" : stripTitle;
+
+        if (root.startsWith ("/bus/"))
+        {
+            juce::String custom;
+            model.getString (root + "/config/name", custom);
+
+            if (custom.isNotEmpty())
+                shown = custom;
+        }
+
+        if (! title.isBeingEdited())
+            title.setText (shown, juce::dontSendNotification);
+
+        if (root.startsWith ("/bus/") || root.startsWith ("/mtx/"))
+            stripTarget.setButtonText (shown);
         const auto active = juce::Colour (0xff3d6f8f);
         stripTarget.setColour (juce::TextButton::buttonColourId, root == stripRoot ? active : juce::Colour (0xff232830));
         stereoTarget.setColour (juce::TextButton::buttonColourId, root == "/main/st" ? active : juce::Colour (0xff232830));
@@ -917,6 +1614,42 @@ public:
             model.getFloat (root + "/dyn/mgain", value);
             makeup.setValue (value, juce::dontSendNotification);
         }
+
+        const bool bus = root.startsWith ("/bus/");
+        groupPad->setVisible (bus);
+
+        if (bus)
+            groupPad->setRoot (root);
+
+        const bool feedsMatrices = bus || root.startsWith ("/main/");
+        matrixHeading.setVisible (feedsMatrices);
+        applyingMatrix = true;
+
+        for (int matrix = 0; matrix < numMatrices; ++matrix)
+        {
+            matrixName[(size_t) matrix].setVisible (feedsMatrices);
+            matrixLevel[(size_t) matrix].setVisible (feedsMatrices);
+            matrixPre[(size_t) matrix].setVisible (bus);
+
+            if (! feedsMatrices)
+                continue;
+
+            if (! matrixLevel[(size_t) matrix].isMouseButtonDown())
+            {
+                float level = 0.0f;
+                model.getFloat (matrixSendPath (matrix) + "/level", level);
+                matrixLevel[(size_t) matrix].setValue (level, juce::dontSendNotification);
+            }
+
+            if (bus && ! matrixPre[(size_t) matrix].isMouseButtonDown())
+            {
+                int pre = 0;
+                model.getInt (matrixSendPath (matrix) + "/tap", pre);
+                matrixPre[(size_t) matrix].setToggleState (pre != 0, juce::dontSendNotification);
+            }
+        }
+
+        applyingMatrix = false;
     }
 
     void paint (juce::Graphics& g) override
@@ -934,7 +1667,31 @@ public:
         stereoTarget.setBounds (header.removeFromRight (52).reduced (3, 2));
         stripTarget.setBounds (header.removeFromRight (120).reduced (3, 2));
 
-        auto eqRow = area.removeFromTop (std::min (168, area.getHeight() / 2));
+        const bool bus = root.startsWith ("/bus/");
+        const bool feedsMatrices = bus || root.startsWith ("/main/");
+
+        if (bus)
+            groupPad->setBounds (area.removeFromRight (juce::jmin (220, area.getWidth() / 4)).reduced (4, 0));
+
+        if (feedsMatrices)
+        {
+            auto column = area.removeFromRight (juce::jmin (250, area.getWidth() / 3)).reduced (4, 0);
+            matrixHeading.setBounds (column.removeFromTop (16));
+            const int rowHeight = juce::jmax (1, column.getHeight() / numMatrices);
+
+            for (int matrix = 0; matrix < numMatrices; ++matrix)
+            {
+                auto row = column.removeFromTop (rowHeight).reduced (0, 1);
+                matrixName[(size_t) matrix].setBounds (row.removeFromLeft (46));
+
+                if (bus)
+                    matrixPre[(size_t) matrix].setBounds (row.removeFromRight (44).reduced (1, 2));
+
+                matrixLevel[(size_t) matrix].setBounds (row);
+            }
+        }
+
+        auto eqRow = area.removeFromTop (std::min (168, std::max (1, area.getHeight() / 2)));
         eqOn.setBounds (eqRow.removeFromLeft (72).reduced (6, 36));
         const int bandWidth = std::max (1, eqRow.getWidth() / numEqBands);
 
@@ -948,10 +1705,17 @@ public:
     }
 
 private:
+    juce::String matrixSendPath (int matrix) const
+    {
+        return root + "/mix/" + juce::String (matrix + 1).paddedLeft ('0', 2);
+    }
+
     void setRoot (const juce::String& newRoot)
     {
         root = newRoot;
+        title.setEditable (false, root.startsWith ("/bus/"), false);
         refresh();
+        resized();
     }
 
     ConsoleModel& model;
@@ -968,6 +1732,12 @@ private:
     juce::Slider threshold;
     juce::Slider ratio;
     juce::Slider makeup;
+    std::unique_ptr<GroupPad> groupPad;
+    juce::Label matrixHeading;
+    std::array<juce::Label, numMatrices> matrixName;
+    std::array<juce::Slider, numMatrices> matrixLevel;
+    std::array<juce::TextButton, numMatrices> matrixPre;
+    bool applyingMatrix = false;
 };
 
 MainComponent::MainComponent()
@@ -1012,11 +1782,17 @@ MainComponent::MainComponent()
         if (busesOpen)
         {
             matricesOpen = false;
+            dcasOpen = false;
             matricesButton.setToggleState (false, juce::dontSendNotification);
-        }
-
-        if (busesOpen)
+            dcasButton.setToggleState (false, juce::dontSendNotification);
+            faderBank = (int) FaderBay::Bank::buses;
+            faderBay->setBank (FaderBay::Bank::buses);
             selectBus (selectedBus);
+        }
+        else
+        {
+            showBank ((int) FaderBay::Bank::ch1);
+        }
 
         resized();
     };
@@ -1024,7 +1800,7 @@ MainComponent::MainComponent()
 
     matricesButton.setClickingTogglesState (true);
     matricesButton.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xff3d6f8f));
-    matricesButton.setTooltip ("Show the 6 matrices and their sends");
+    matricesButton.setTooltip ("Show the 6 matrices");
     matricesButton.onClick = [this]
     {
         matricesOpen = matricesButton.getToggleState();
@@ -1032,15 +1808,46 @@ MainComponent::MainComponent()
         if (matricesOpen)
         {
             busesOpen = false;
+            dcasOpen = false;
             busesButton.setToggleState (false, juce::dontSendNotification);
-        }
-
-        if (matricesOpen)
+            dcasButton.setToggleState (false, juce::dontSendNotification);
+            faderBank = (int) FaderBay::Bank::matrices;
+            faderBay->setBank (FaderBay::Bank::matrices);
             selectMatrix (selectedMatrix);
+        }
+        else
+        {
+            showBank ((int) FaderBay::Bank::ch1);
+        }
 
         resized();
     };
     addAndMakeVisible (matricesButton);
+
+    dcasButton.setClickingTogglesState (true);
+    dcasButton.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xff3d6f8f));
+    dcasButton.setTooltip ("Show the 8 DCA faders");
+    dcasButton.onClick = [this]
+    {
+        dcasOpen = dcasButton.getToggleState();
+
+        if (dcasOpen)
+        {
+            busesOpen = false;
+            matricesOpen = false;
+            busesButton.setToggleState (false, juce::dontSendNotification);
+            matricesButton.setToggleState (false, juce::dontSendNotification);
+            faderBank = (int) FaderBay::Bank::dcas;
+            faderBay->setBank (FaderBay::Bank::dcas);
+        }
+        else
+        {
+            showBank ((int) FaderBay::Bank::ch1);
+        }
+
+        resized();
+    };
+    addAndMakeVisible (dcasButton);
 
     for (auto* label : { &outputLabel, &listenLabel, &mainLabel, &centerLabel })
     {
@@ -1155,15 +1962,12 @@ MainComponent::MainComponent()
     sourceList.setOutlineThickness (1);
     addAndMakeVisible (sourceList);
 
-    strips = std::make_unique<StripBank> (model, engine);
-    strips->setSelectHandler ([this] (int channel) { selectChannel (channel); });
-    buses = std::make_unique<BusBank> (model);
-    buses->setSelectHandler ([this] (int bus) { selectBus (bus); });
-    matrices = std::make_unique<MatrixBank> (model);
-    matrices->setSelectHandler ([this] (int matrix) { selectMatrix (matrix); });
-    matrixSends = std::make_unique<MatrixSendPanel> (model);
-    addChildComponent (matrixSends.get());
-    viewport.setViewedComponent (strips.get(), false);
+    faderBay = std::make_unique<FaderBay> (model, engine);
+    faderBay->onChannel = [this] (int channel) { selectChannel (channel); };
+    faderBay->onBus = [this] (int bus) { selectBus (bus); };
+    faderBay->onMatrix = [this] (int matrix) { selectMatrix (matrix); };
+    faderBay->onSpare = [this] (int kind, int index) { selectSpare (kind, index); };
+    viewport.setViewedComponent (faderBay.get(), false);
     viewport.setScrollBarsShown (false, true);
     addAndMakeVisible (viewport);
 
@@ -1173,6 +1977,26 @@ MainComponent::MainComponent()
 
     groupEditor = std::make_unique<GroupEditor> (model);
     addChildComponent (groupEditor.get());
+    matrixEditor = std::make_unique<MatrixEditor> (model);
+    addChildComponent (matrixEditor.get());
+    spareTitle.setJustificationType (juce::Justification::centred);
+    spareTitle.setFont (juce::Font (juce::FontOptions (18.0f)));
+    spareTitle.setColour (juce::Label::textColourId, text());
+    addChildComponent (spareTitle);
+
+    const char* bankNames[] = { "All", "1-16", "17-32", "Aux FX", "BUS MTX" };
+    const int bankIds[] = { (int) FaderBay::Bank::all, (int) FaderBay::Bank::ch1, (int) FaderBay::Bank::ch17,
+                            (int) FaderBay::Bank::aux, (int) FaderBay::Bank::busMtx };
+
+    for (int i = 0; i < 5; ++i)
+    {
+        bankButton[i].setButtonText (bankNames[i]);
+        bankButton[i].setColour (juce::TextButton::buttonColourId, juce::Colour (0xff232830));
+        bankButton[i].setColour (juce::TextButton::textColourOffId, text());
+        const int bank = bankIds[i];
+        bankButton[i].onClick = [this, bank] { showBank (bank); };
+        addAndMakeVisible (bankButton[i]);
+    }
 
     mainMeter.readLevel = [this] { return engine.getMainMeter(); };
     addAndMakeVisible (mainMeter);
@@ -1249,6 +2073,21 @@ MainComponent::MainComponent()
     centerStereo.onClick = [this] { model.setInt ("/main/m/mix/st", centerStereo.getToggleState() ? 1 : 0); };
     addAndMakeVisible (centerStereo);
 
+    for (int group = 0; group < numMuteGroups; ++group)
+    {
+        auto& button = muteGroupButton[group];
+        button.setButtonText (juce::String (group + 1));
+        button.setClickingTogglesState (true);
+        button.setColour (juce::TextButton::buttonOnColourId, muteOn());
+        button.setTooltip ("Mute group " + juce::String (group + 1));
+        button.onClick = [this, group]
+        {
+            model.setInt ("/config/mute/" + juce::String (group + 1).paddedLeft ('0', 2),
+                          muteGroupButton[group].getToggleState() ? 1 : 0);
+        };
+        addAndMakeVisible (button);
+    }
+
     status.setColour (juce::Label::textColourId, dim());
     status.setFont (juce::Font (juce::FontOptions (12.0f)));
     addAndMakeVisible (status);
@@ -1305,6 +2144,8 @@ void MainComponent::resized()
     playButton.setBounds (transport.removeFromLeft (36));
     transport.removeFromLeft (6);
     restartButton.setBounds (transport.removeFromLeft (36));
+    transport.removeFromLeft (8);
+    dcasButton.setBounds (transport.removeFromLeft (72));
     transport.removeFromLeft (10);
     timeLabel.setBounds (transport.removeFromRight (118));
     timeline.setBounds (transport.reduced (0, 2));
@@ -1313,9 +2154,14 @@ void MainComponent::resized()
     sourceHeading.setVisible (sourcesOpen);
     emptySources.setVisible (sourcesOpen && model.getNumSources() == 0);
     sourceList.setVisible (sourcesOpen && model.getNumSources() > 0);
-    channelEditor->setVisible (! sourcesOpen && ! matricesOpen && ! busesOpen);
-    groupEditor->setVisible (! sourcesOpen && (busesOpen || matricesOpen));
-    matrixSends->setVisible (matricesOpen && ! sourcesOpen);
+    const bool showChannel = ! sourcesOpen && topEditor == 0;
+    const bool showBus = ! sourcesOpen && topEditor == 1;
+    const bool showMatrix = ! sourcesOpen && topEditor == 2;
+    const bool showSpare = ! sourcesOpen && topEditor == 3;
+    channelEditor->setVisible (showChannel);
+    groupEditor->setVisible (showBus);
+    matrixEditor->setVisible (showMatrix);
+    spareTitle.setVisible (showSpare);
 
     if (sourcesOpen)
     {
@@ -1324,23 +2170,27 @@ void MainComponent::resized()
         emptySources.setBounds (pageArea.removeFromTop (40));
         sourceList.setBounds (pageArea);
     }
-    else if (matricesOpen)
-    {
-        auto editorColumn = topHalf.removeFromLeft (std::min (460, topHalf.getWidth() / 2));
-        groupEditor->setBounds (editorColumn.reduced (8, 6));
-        matrixSends->setBounds (topHalf.reduced (8, 6));
-    }
-    else if (busesOpen)
+    else if (showBus)
     {
         groupEditor->setBounds (topHalf.reduced (8, 6));
+    }
+    else if (showMatrix)
+    {
+        matrixEditor->setBounds (topHalf.reduced (8, 6));
+    }
+    else if (showSpare)
+    {
+        spareTitle.setBounds (topHalf.reduced (24, 24));
     }
     else
     {
         channelEditor->setBounds (topHalf.reduced (8, 6));
     }
 
-    auto mainColumn = area.removeFromRight (228).reduced (6, 6);
+    auto mainColumn = area.removeFromRight (268).reduced (6, 6);
+    auto muteGroups = mainColumn.removeFromLeft (40);
     auto labels = mainColumn.removeFromTop (20);
+    muteGroups.removeFromTop (20);
     centerLabel.setBounds (labels.removeFromLeft (labels.getWidth() / 2));
     mainLabel.setBounds (labels);
     auto buttons = mainColumn.removeFromBottom (26);
@@ -1354,61 +2204,180 @@ void MainComponent::resized()
     mainScale.setBounds (mainColumn.removeFromLeft (28));
     mainMeter.setBounds (mainColumn.removeFromRight (10).reduced (0, 6));
     mainFader.setBounds (mainColumn.reduced (1, 0));
+    muteGroups.removeFromBottom (26);
+
+    for (int group = 0; group < numMuteGroups; ++group)
+        muteGroupButton[group].setBounds (muteGroups.removeFromTop (muteGroups.getHeight() / std::max (1, numMuteGroups - group)).reduced (1));
 
     status.setBounds (area.removeFromBottom (18).reduced (10, 0));
+    auto bankColumn = area.removeFromLeft (84);
+    const int bankIds[] = { (int) FaderBay::Bank::all, (int) FaderBay::Bank::ch1, (int) FaderBay::Bank::ch17,
+                            (int) FaderBay::Bank::aux, (int) FaderBay::Bank::busMtx };
+    const int bankHeight = juce::jmax (1, bankColumn.getHeight() / 5);
+
+    for (int i = 0; i < 5; ++i)
+    {
+        bankButton[i].setBounds (bankColumn.removeFromTop (bankHeight).reduced (4, 3));
+        const bool on = faderBank == bankIds[i];
+        bankButton[i].setColour (juce::TextButton::buttonColourId, on ? juce::Colour (0xff3d6f8f) : juce::Colour (0xff232830));
+    }
+
     viewport.setBounds (area.reduced (4, 4));
     const int stripHeight = std::max (0, viewport.getHeight() - viewport.getScrollBarThickness());
-    auto* bank = matricesOpen ? static_cast<juce::Component*> (matrices.get())
-                              : busesOpen ? static_cast<juce::Component*> (buses.get())
-                                          : static_cast<juce::Component*> (strips.get());
 
-    if (viewport.getViewedComponent() != bank)
-        viewport.setViewedComponent (bank, false);
+    if (viewport.getViewedComponent() != faderBay.get())
+        viewport.setViewedComponent (faderBay.get(), false);
 
-    const int bankWidth = matricesOpen ? matrices->widthForMatrices()
-                                        : busesOpen ? buses->widthForBuses()
-                                                    : strips->widthForChannels();
-    bank->setSize (bankWidth, stripHeight);
+    faderBay->setSize (faderBay->widthForBank(), stripHeight);
+}
+
+void MainComponent::showBank (int bank)
+{
+    faderBank = bank;
+    busesOpen = false;
+    matricesOpen = false;
+    dcasOpen = false;
+    busesButton.setToggleState (false, juce::dontSendNotification);
+    matricesButton.setToggleState (false, juce::dontSendNotification);
+    dcasButton.setToggleState (false, juce::dontSendNotification);
+    faderBay->setBank ((FaderBay::Bank) bank);
+
+    if (bank == (int) FaderBay::Bank::ch1)
+    {
+        if (selectedChannel > 15)
+            selectedChannel = 0;
+
+        selectChannel (selectedChannel);
+    }
+    else if (bank == (int) FaderBay::Bank::ch17)
+    {
+        if (selectedChannel < 16)
+            selectedChannel = 16;
+
+        selectChannel (selectedChannel);
+    }
+    else if (bank == (int) FaderBay::Bank::aux)
+    {
+        selectSpare (0, 0);
+    }
+    else if (bank == (int) FaderBay::Bank::busMtx)
+    {
+        selectBus (selectedBus);
+    }
+    else if (topEditor == 0)
+    {
+        faderBay->setSelectedChannel (selectedChannel);
+    }
+    else if (topEditor == 1)
+    {
+        faderBay->setSelectedBus (selectedBus);
+    }
+    else if (topEditor == 2)
+    {
+        faderBay->setSelectedMatrix (selectedMatrix);
+    }
+    else
+    {
+        faderBay->setSelectedSpare (spareKind, spareIndex);
+    }
+
+    resized();
+}
+
+void MainComponent::selectSpare (int kind, int index)
+{
+    const bool changed = topEditor != 3 || sourcesOpen;
+    topEditor = 3;
+    spareKind = kind;
+    spareIndex = index;
+    sourcesOpen = false;
+    sourcesButton.setToggleState (false, juce::dontSendNotification);
+    faderBay->setSelectedSpare (kind, index);
+
+    juce::String name;
+
+    if (kind == 0)
+        name = "Aux " + juce::String (index + 1);
+    else if (kind == 1)
+        name = index == 0 ? "USB L" : "USB R";
+    else if (kind == 2)
+        name = "FX" + juce::String (index / 2 + 1) + (index % 2 == 0 ? " L" : " R");
+    else
+        name = "DCA " + juce::String (index + 1);
+
+    spareTitle.setText (name + " is on the fader bank. Effects and USB playback are not mixed yet.", juce::dontSendNotification);
+
+    if (changed)
+        resized();
 }
 
 void MainComponent::selectBus (int busIndex)
 {
+    const bool changed = topEditor != 1 || sourcesOpen;
+    topEditor = 1;
+    sourcesOpen = false;
+    sourcesButton.setToggleState (false, juce::dontSendNotification);
     selectedBus = juce::jlimit (0, numBuses - 1, busIndex);
-    buses->setSelected (selectedBus);
+    faderBay->setSelectedBus (selectedBus);
     groupEditor->showStrip ("/bus/" + juce::String (selectedBus + 1).paddedLeft ('0', 2),
-                            "Bus " + juce::String (selectedBus + 1));
-
-    const int x = selectedBus * BusBank::stripWidth;
+                            model.getBusName (selectedBus));
+    const int x = faderBay->xFor (faderBay->busStrip (selectedBus));
     const auto view = viewport.getViewArea();
 
-    if (busesOpen && (x < view.getX() || x + BusBank::stripWidth > view.getRight()))
-        viewport.setViewPosition (std::max (0, x - BusBank::stripWidth), 0);
+    if (x < view.getX() || x + FaderBay::stripWidth > view.getRight())
+        viewport.setViewPosition (std::max (0, x - FaderBay::stripWidth), 0);
+
+    if (changed)
+        resized();
 }
 
 void MainComponent::selectMatrix (int matrixIndex)
 {
+    const bool changed = topEditor != 2 || sourcesOpen;
+    topEditor = 2;
+    sourcesOpen = false;
+    sourcesButton.setToggleState (false, juce::dontSendNotification);
     selectedMatrix = juce::jlimit (0, numMatrices - 1, matrixIndex);
-    matrices->setSelected (selectedMatrix);
-    groupEditor->showStrip ("/mtx/" + juce::String (selectedMatrix + 1).paddedLeft ('0', 2),
-                            "Mtx " + juce::String (selectedMatrix + 1));
+    faderBay->setSelectedMatrix (selectedMatrix);
+    matrixEditor->setMatrix (selectedMatrix);
+    const int x = faderBay->xFor (faderBay->matrixStrip (selectedMatrix));
+    const auto view = viewport.getViewArea();
+
+    if (x < view.getX() || x + FaderBay::stripWidth > view.getRight())
+        viewport.setViewPosition (std::max (0, x - FaderBay::stripWidth), 0);
+
+    if (changed)
+        resized();
 }
 
 void MainComponent::selectChannel (int channelIndex)
 {
+    const bool changed = topEditor != 0 || sourcesOpen;
+    topEditor = 0;
     selectedChannel = juce::jlimit (0, numChannels - 1, channelIndex);
-    const bool wasShowingSources = sourcesOpen;
     sourcesOpen = false;
     sourcesButton.setToggleState (false, juce::dontSendNotification);
-    strips->setSelected (selectedChannel);
-    channelEditor->setChannel (selectedChannel);
 
-    const int x = selectedChannel * StripBank::stripWidth;
+    if (faderBank == (int) FaderBay::Bank::ch1 && selectedChannel >= 16)
+    {
+        faderBank = (int) FaderBay::Bank::ch17;
+        faderBay->setBank (FaderBay::Bank::ch17);
+    }
+    else if (faderBank == (int) FaderBay::Bank::ch17 && selectedChannel < 16)
+    {
+        faderBank = (int) FaderBay::Bank::ch1;
+        faderBay->setBank (FaderBay::Bank::ch1);
+    }
+
+    faderBay->setSelectedChannel (selectedChannel);
+    channelEditor->setChannel (selectedChannel);
+    const int x = faderBay->xFor (faderBay->channelStrip (selectedChannel));
     const auto view = viewport.getViewArea();
 
-    if (x < view.getX() || x + StripBank::stripWidth > view.getRight())
-        viewport.setViewPosition (std::max (0, x - StripBank::stripWidth), 0);
+    if (x < view.getX() || x + FaderBay::stripWidth > view.getRight())
+        viewport.setViewPosition (std::max (0, x - FaderBay::stripWidth), 0);
 
-    if (wasShowingSources)
+    if (changed)
         resized();
 }
 
@@ -1435,12 +2404,20 @@ void MainComponent::timerCallback()
         status.setText (next, juce::dontSendNotification);
 
     syncTransport();
-    strips->refresh();
-    buses->refresh();
-    matrices->refresh();
-    matrixSends->refresh();
+    faderBay->refresh();
+
+    for (int group = 0; group < numMuteGroups; ++group)
+    {
+        if (muteGroupButton[group].isMouseButtonDown())
+            continue;
+
+        int enabled = 0;
+        model.getInt ("/config/mute/" + juce::String (group + 1).paddedLeft ('0', 2), enabled);
+        muteGroupButton[group].setToggleState (enabled != 0, juce::dontSendNotification);
+    }
     channelEditor->refresh();
     groupEditor->refresh();
+    matrixEditor->refresh();
 }
 
 void MainComponent::syncTransport()
@@ -1507,7 +2484,7 @@ void MainComponent::refreshSources()
     for (int i = 0; i < model.getNumSources(); ++i)
         names.add (model.getSourceName (i));
 
-    strips->refresh();
+    faderBay->refresh();
     channelEditor->setSourceNames (names);
     sourceList.updateContent();
     sourceList.repaint();

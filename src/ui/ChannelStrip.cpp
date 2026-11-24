@@ -49,6 +49,12 @@ float readFloat (ConsoleModel& model, const juce::String& path, float fallback)
 }
 } // namespace
 
+void MeterView::mouseDown (const juce::MouseEvent&)
+{
+    if (onPressed != nullptr)
+        onPressed();
+}
+
 void MeterView::paint (juce::Graphics& g)
 {
     auto bounds = getLocalBounds().toFloat();
@@ -86,6 +92,12 @@ void ConsoleFader::paint (juce::Graphics& g)
 FaderScale::FaderScale (juce::Slider& faderToMark)
     : fader (faderToMark)
 {
+}
+
+void FaderScale::mouseDown (const juce::MouseEvent&)
+{
+    if (onPressed != nullptr)
+        onPressed();
 }
 
 void FaderScale::paint (juce::Graphics& g)
@@ -158,6 +170,10 @@ ChannelStrip::ChannelStrip (ConsoleModel& modelToUse, MixEngine& engineToUse, in
         choose();
         openChannelIconPicker (icon, model, index, [this] { refresh(); });
     };
+    icon.onDoubleClick = [this]
+    {
+        openStripColourPicker (icon, model, channelLeaf (index, "config/color"), [this] { refresh(); });
+    };
     addAndMakeVisible (icon);
     refresh();
 
@@ -181,6 +197,8 @@ ChannelStrip::ChannelStrip (ConsoleModel& modelToUse, MixEngine& engineToUse, in
     addAndMakeVisible (pan);
 
     meter.readLevel = [this] { return engine.getChannelMeter (index); };
+    meter.onPressed = [this] { choose(); };
+    scale.onPressed = [this] { choose(); };
     addAndMakeVisible (meter);
 
     fader.setSliderStyle (juce::Slider::LinearVertical);
@@ -281,6 +299,10 @@ void ChannelStrip::refresh()
     int iconIndex = -1;
     model.getInt (channelLeaf (index, "config/icon"), iconIndex);
     icon.setIcon (iconIndex);
+    int colour = 6;
+    model.getInt (channelLeaf (index, "config/color"), colour);
+    icon.setStripColour (colour);
+    scribble.setColour (juce::TextButton::textColourOffId, stripNameColour (colour));
 
     if (! stereo.isMouseButtonDown())
     {
@@ -309,7 +331,9 @@ void ChannelStrip::paint (juce::Graphics& g)
     auto bounds = getLocalBounds().reduced (3).toFloat();
     g.setColour (selected ? juce::Colour (0xff35414c) : stripColour());
     g.fillRoundedRectangle (bounds, 6.0f);
-    const auto colour = juce::Colour::fromHSV (std::fmod (index * 0.17f, 1.0f), 0.55f, selected ? 0.9f : 0.7f, 1.0f);
+    int stored = 6;
+    model.getInt (channelLeaf (index, "config/color"), stored);
+    const auto colour = stripColourFrom (stored);
     g.setColour (colour);
     g.fillRoundedRectangle (8.0f, 8.0f, (float) getWidth() - 16.0f, selected ? 6.0f : 4.0f, 2.0f);
 

@@ -436,6 +436,45 @@ public:
             block = renderBlock (engine, 64);
             expectWithinAbsoluteError (block.left[32], std::pow (10.0f, -4.5f / 20.0f), 0.08f, "bus compressor settles near 4:1");
         }
+
+        beginTest ("a DCA and a mute group scale the assigned strip");
+        {
+            ConsoleModel model;
+            MixEngine engine (model);
+            engine.prepareToPlay (32, 48000.0);
+            const int source = engine.adoptMemorySource (std::vector<float> (160, 1.0f), 48000.0, "dca");
+            routeSource (model, source, 0, { 0 });
+            expect (model.setFloat ("/ch/01/mix/pan", 0.0f));
+            expect (model.setInt ("/ch/01/grp/dca/01", 1));
+            expect (model.setFloat ("/dca/01/fader", 0.5f));
+            engine.play();
+            engine.snapSmoothers();
+            auto block = renderBlock (engine, 32);
+            expectWithinAbsoluteError (block.left[8], std::pow (10.0f, -10.0f / 20.0f), 0.03f, "DCA at -10 dB");
+
+            expect (model.setInt ("/dca/01/on", 0));
+            engine.snapSmoothers();
+            block = renderBlock (engine, 32);
+            expectWithinAbsoluteError (block.left[8], 0.0f, 0.02f, "DCA mute silences the channel");
+
+            expect (model.setInt ("/dca/01/on", 1));
+            expect (model.setFloat ("/dca/01/fader", 0.75f));
+            expect (model.setInt ("/ch/01/grp/mute/01", 1));
+            expect (model.setInt ("/config/mute/01", 1));
+            engine.snapSmoothers();
+            block = renderBlock (engine, 32);
+            expectWithinAbsoluteError (block.left[8], 0.0f, 0.02f, "mute group silences an assigned channel");
+
+            expect (model.setInt ("/config/mute/01", 0));
+            expect (model.setInt ("/ch/01/mix/st", 0));
+            expect (model.setFloat ("/ch/01/mix/01/level", 0.75f));
+            expect (model.setInt ("/bus/01/mix/st", 1));
+            expect (model.setInt ("/bus/01/grp/dca/02", 1));
+            expect (model.setFloat ("/dca/02/fader", 0.5f));
+            engine.snapSmoothers();
+            block = renderBlock (engine, 32);
+            expectWithinAbsoluteError (block.left[8], std::pow (10.0f, -10.0f / 20.0f), 0.03f, "bus DCA at -10 dB");
+        }
     }
 };
 

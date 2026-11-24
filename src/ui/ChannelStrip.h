@@ -14,7 +14,9 @@ class MeterView : public juce::Component
 {
 public:
     std::function<float()> readLevel;
+    std::function<void()> onPressed;
     void paint (juce::Graphics& g) override;
+    void mouseDown (const juce::MouseEvent& event) override;
 };
 
 class ConsoleFader : public juce::Slider
@@ -29,6 +31,9 @@ public:
     explicit FaderScale (juce::Slider& faderToMark);
 
     void paint (juce::Graphics& g) override;
+    void mouseDown (const juce::MouseEvent& event) override;
+
+    std::function<void()> onPressed;
 
 private:
     juce::Slider& fader;
