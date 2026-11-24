@@ -1255,7 +1255,7 @@ public:
 
             g.setColour(dim());
             g.setFont(juce::Font(juce::FontOptions(10.0f)));
-            g.drawText("Bus " + juce::String(bus + 1), x, laid.labelTop, laid.colW, 16, juce::Justification::centred, false);
+            g.drawFittedText(model.getBusName(bus), x, laid.labelTop, laid.colW, 16, juce::Justification::centred, 1);
             juce::ignoreUnused(column);
         }
     }
@@ -1553,7 +1553,7 @@ private:
         const float unit = unity ? 0.75f : clamp01((position.x - track.getX()) / juce::jmax(1.0f, track.getWidth()));
         levels[(size_t) dragBus] = unit;
         model.setFloat(channelPath(channel, "mix/" + busNumber(dragBus) + "/level"), unit);
-        setTooltip("Bus " + juce::String(dragBus + 1) + " send  " + decibelText(faderToDb(unit)) + ". The tick is unity");
+        setTooltip(model.getBusName(dragBus) + " send  " + decibelText(faderToDb(unit)) + ". The tick is unity");
         repaint();
     }
 
@@ -1839,6 +1839,9 @@ public:
 
         if (! name.isBeingEdited())
             name.setText(model.getChannelName(index), juce::dontSendNotification);
+
+        for (int bus = 0; bus < numBuses; ++bus)
+            sendBox[bus].setTitle(model.getBusName(bus), juce::Colour(0xff7eb6d6));
 
         const int route = model.getChannelSource(index);
         const int patched = model.getInputSource(route);
@@ -2334,6 +2337,9 @@ public:
 
         title.setFont(juce::Font(juce::FontOptions(16.0f)));
         title.setColour(juce::Label::textColourId, text());
+        title.setColour(juce::Label::backgroundWhenEditingColourId, juce::Colour(0xff1c2128));
+        title.setEditable(false, true, false);
+        title.onTextChange = [this] { model.setMatrixName(index, title.getText()); };
         addAndMakeVisible(title);
 
         insert.setClickingTogglesState(true);
@@ -2405,7 +2411,7 @@ public:
     {
         index = juce::jlimit(0, numMatrices - 1, matrixIndex);
         root = "/mtx/" + number();
-        title.setText("Mtx " + juce::String(index + 1), juce::dontSendNotification);
+        title.setText(model.getMatrixName(index), juce::dontSendNotification);
         eqGraph.setTarget(root, numEqBands, false);
         gateGraph.setPathRoot(root);
         compGraph.setPathRoot(root);
@@ -2415,6 +2421,9 @@ public:
 
     void refresh()
     {
+        if (! title.isBeingEdited())
+            title.setText(model.getMatrixName(index), juce::dontSendNotification);
+
         if (! insert.isMouseButtonDown())
         {
             int post = 0;
@@ -2501,7 +2510,7 @@ public:
         if (home)
         {
             auto header = area.removeFromTop(32);
-            title.setBounds(header.removeFromLeft(120));
+            title.setBounds(header.removeFromLeft(160));
             insert.setBounds(header.removeFromLeft(120).reduced(4, 2));
             groupPad->setBounds(area.reduced(4, 4));
         }

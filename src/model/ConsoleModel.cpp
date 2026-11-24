@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 #include "ConsoleModel.h"
+#include "engine/FxProcessor.h"
 
 #include <algorithm>
 
@@ -497,6 +498,84 @@ bool getMixOn(const MixPoint& mix, const juce::StringArray& tokens, int index, i
     return false;
 }
 
+bool setReturnFloat(ReturnStrip& strip, const juce::StringArray& tokens, float value)
+{
+    if (tokens.size() >= 4 && tokens[2] == "mix" && tokens[3] == "mlevel")
+    {
+        strip.monoLevel.store(clampUnit(value), std::memory_order_relaxed);
+        return true;
+    }
+
+    if (tokens.size() >= 5 && tokens[2] == "mix" && tokens[3].containsOnly("0123456789") && tokens[4] == "level")
+    {
+        const int bus = indexOf(tokens[3], numBuses);
+
+        if (bus < 0)
+            return false;
+
+        strip.sendLevel[bus].store(clampUnit(value), std::memory_order_relaxed);
+        return true;
+    }
+
+    return setMixFloat(strip, tokens, 2, value, numChannelEqBands);
+}
+
+bool getReturnFloat(const ReturnStrip& strip, const juce::StringArray& tokens, float& value)
+{
+    if (tokens.size() >= 4 && tokens[2] == "mix" && tokens[3] == "mlevel")
+    {
+        value = strip.monoLevel.load(std::memory_order_relaxed);
+        return true;
+    }
+
+    if (tokens.size() >= 5 && tokens[2] == "mix" && tokens[3].containsOnly("0123456789") && tokens[4] == "level")
+    {
+        const int bus = indexOf(tokens[3], numBuses);
+
+        if (bus < 0)
+            return false;
+
+        value = strip.sendLevel[bus].load(std::memory_order_relaxed);
+        return true;
+    }
+
+    return getMixFloat(strip, tokens, 2, value, numChannelEqBands);
+}
+
+bool setReturnAssign(ReturnStrip& strip, const juce::StringArray& tokens, int value)
+{
+    if (tokens.size() >= 4 && tokens[2] == "mix" && tokens[3] == "st")
+    {
+        strip.toMain.store(value != 0 ? 1 : 0, std::memory_order_relaxed);
+        return true;
+    }
+
+    if (tokens.size() >= 4 && tokens[2] == "mix" && tokens[3] == "mono")
+    {
+        strip.toMono.store(value != 0 ? 1 : 0, std::memory_order_relaxed);
+        return true;
+    }
+
+    return false;
+}
+
+bool getReturnAssign(const ReturnStrip& strip, const juce::StringArray& tokens, int& value)
+{
+    if (tokens.size() >= 4 && tokens[2] == "mix" && tokens[3] == "st")
+    {
+        value = strip.toMain.load(std::memory_order_relaxed);
+        return true;
+    }
+
+    if (tokens.size() >= 4 && tokens[2] == "mix" && tokens[3] == "mono")
+    {
+        value = strip.toMono.load(std::memory_order_relaxed);
+        return true;
+    }
+
+    return false;
+}
+
 } // namespace
 
 ConsoleModel::ConsoleModel()
@@ -563,10 +642,23 @@ ConsoleModel::ConsoleModel()
         p16Outputs[(size_t) i].tap.store(0, std::memory_order_relaxed);
     }
 
+    static const int factoryFx[] = {
+        (int) FxAlgo::vintageRoom, (int) FxAlgo::hall, (int) FxAlgo::stereoDelay, (int) FxAlgo::stereoChorus
+    };
+
+    for (int i = 0; i < 4; ++i)
+    {
+        storeFxDefaults(fx[(size_t) i], factoryFx[i]);
+        fx[(size_t) i].on.store(1, std::memory_order_relaxed);
+        busNames[12 + i] = fxAlgoName(factoryFx[i]);
+    }
+
     for (int i = 0; i < numFxReturns; ++i)
     {
-        fxReturnNames[i] = "Fx " + juce::String(i + 1);
+        fxReturnNames[i] = "FX" + juce::String(i / 2 + 1) + (i % 2 == 0 ? " L" : " R");
         fxReturns[(size_t) i].color = 6;
+        fxReturns[(size_t) i].toMain.store(1, std::memory_order_relaxed);
+        fxReturns[(size_t) i].pan.store(i % 2 == 0 ? 0.0f : 1.0f, std::memory_order_relaxed);
     }
 
     for (int i = 0; i < numAuxIns; ++i)
@@ -575,14 +667,29 @@ ConsoleModel::ConsoleModel()
         auxIns[(size_t) i].color = 6;
     }
 
+    usbNames[0] = "USB L";
+    usbNames[1] = "USB R";
+
     for (auto& strip : usbReturns)
         strip.color = 6;
 
     for (int i = 0; i < numDcas; ++i)
+    {
         dcaNames[i] = "DCA " + juce::String(i + 1);
+        dcaColor[i] = i;
+    }
 
     for (auto& group : muteGroups)
         group.store(0, std::memory_order_relaxed);
+}
+
+void ConsoleModel::setFxType(int slot, int type)
+{
+    if (slot < 0 || slot >= numFxSlots)
+        return;
+
+    storeFxDefaults(fx[(size_t) slot], type);
+    fx[(size_t) slot].on.store(type == (int) FxAlgo::empty ? 0 : 1, std::memory_order_relaxed);
 }
 
 void ConsoleModel::setListenMode(ListenMode mode) noexcept
@@ -1109,7 +1216,7 @@ void ConsoleModel::setChannelName(int index, const juce::String& name)
     if (index < 0 || index >= numChannels)
         return;
 
-    channelNames[index] = name;
+    channelNames[index] = name.substring(0, 12);
 }
 
 juce::String ConsoleModel::getBusName(int index) const
@@ -1126,6 +1233,86 @@ void ConsoleModel::setBusName(int index, const juce::String& name)
         return;
 
     busNames[index] = name.substring(0, 12);
+}
+
+juce::String ConsoleModel::getDcaName(int index) const
+{
+    if (index < 0 || index >= numDcas)
+        return {};
+
+    return dcaNames[index];
+}
+
+void ConsoleModel::setDcaName(int index, const juce::String& name)
+{
+    if (index < 0 || index >= numDcas)
+        return;
+
+    dcaNames[index] = name.substring(0, 12);
+}
+
+juce::String ConsoleModel::getMatrixName(int index) const
+{
+    if (index < 0 || index >= numMatrices)
+        return {};
+
+    return matrixNames[index];
+}
+
+void ConsoleModel::setMatrixName(int index, const juce::String& name)
+{
+    if (index < 0 || index >= numMatrices)
+        return;
+
+    matrixNames[index] = name.substring(0, 12);
+}
+
+juce::String ConsoleModel::getAuxName(int index) const
+{
+    if (index < 0 || index >= numAuxIns)
+        return {};
+
+    return auxNames[index];
+}
+
+void ConsoleModel::setAuxName(int index, const juce::String& name)
+{
+    if (index < 0 || index >= numAuxIns)
+        return;
+
+    auxNames[index] = name.substring(0, 12);
+}
+
+juce::String ConsoleModel::getFxReturnName(int index) const
+{
+    if (index < 0 || index >= numFxReturns)
+        return {};
+
+    return fxReturnNames[index];
+}
+
+void ConsoleModel::setFxReturnName(int index, const juce::String& name)
+{
+    if (index < 0 || index >= numFxReturns)
+        return;
+
+    fxReturnNames[index] = name.substring(0, 12);
+}
+
+juce::String ConsoleModel::getUsbName(int index) const
+{
+    if (index < 0 || index >= numUsbReturns)
+        return {};
+
+    return usbNames[index];
+}
+
+void ConsoleModel::setUsbName(int index, const juce::String& name)
+{
+    if (index < 0 || index >= numUsbReturns)
+        return;
+
+    usbNames[index] = name.substring(0, 12);
 }
 
 bool ConsoleModel::setFloat(const juce::String& path, float value)
@@ -1246,19 +1433,19 @@ bool ConsoleModel::assignFloat(const juce::String& path, float value)
     if (tokens[0] == "fxrtn")
     {
         const int index = indexOf(tokens[1], numFxReturns);
-        return index >= 0 && setMixFloat(fxReturns[(size_t) index], tokens, 2, value, numChannelEqBands);
+        return index >= 0 && setReturnFloat(fxReturns[(size_t) index], tokens, value);
     }
 
     if (tokens[0] == "auxin")
     {
         const int index = indexOf(tokens[1], numAuxIns);
-        return index >= 0 && setMixFloat(auxIns[(size_t) index], tokens, 2, value, numChannelEqBands);
+        return index >= 0 && setReturnFloat(auxIns[(size_t) index], tokens, value);
     }
 
     if (tokens[0] == "usb")
     {
         const int index = indexOf(tokens[1], numUsbReturns);
-        return index >= 0 && setMixFloat(usbReturns[(size_t) index], tokens, 2, value, numChannelEqBands);
+        return index >= 0 && setReturnFloat(usbReturns[(size_t) index], tokens, value);
     }
 
     if (tokens[0] == "dca")
@@ -1427,19 +1614,19 @@ bool ConsoleModel::getFloat(const juce::String& path, float& value) const
     if (tokens[0] == "fxrtn")
     {
         const int index = indexOf(tokens[1], numFxReturns);
-        return index >= 0 && getMixFloat(fxReturns[(size_t) index], tokens, 2, value, numChannelEqBands);
+        return index >= 0 && getReturnFloat(fxReturns[(size_t) index], tokens, value);
     }
 
     if (tokens[0] == "auxin")
     {
         const int index = indexOf(tokens[1], numAuxIns);
-        return index >= 0 && getMixFloat(auxIns[(size_t) index], tokens, 2, value, numChannelEqBands);
+        return index >= 0 && getReturnFloat(auxIns[(size_t) index], tokens, value);
     }
 
     if (tokens[0] == "usb")
     {
         const int index = indexOf(tokens[1], numUsbReturns);
-        return index >= 0 && getMixFloat(usbReturns[(size_t) index], tokens, 2, value, numChannelEqBands);
+        return index >= 0 && getReturnFloat(usbReturns[(size_t) index], tokens, value);
     }
 
     if (tokens[0] == "dca")
@@ -1839,6 +2026,12 @@ bool ConsoleModel::assignInt(const juce::String& path, int value)
             return true;
         }
 
+        if (tokens.size() >= 4 && tokens[2] == "config" && tokens[3] == "color")
+        {
+            dcaColor[index] = std::clamp(value, 0, 15);
+            return true;
+        }
+
         return false;
     }
 
@@ -1851,7 +2044,7 @@ bool ConsoleModel::assignInt(const juce::String& path, int value)
 
         if (tokens[2] == "type")
         {
-            fx[(size_t) slot].type = value;
+            fx[(size_t) slot].type.store(std::clamp(value, 0, (int) FxAlgo::stereoChorus), std::memory_order_relaxed);
             return true;
         }
 
@@ -1879,6 +2072,9 @@ bool ConsoleModel::assignInt(const juce::String& path, int value)
             strip.color = std::clamp(value, 0, 15);
             return true;
         }
+
+        if (setReturnAssign(strip, tokens, value))
+            return true;
 
         return setMixOn(strip, tokens, 2, value);
     }
@@ -2260,6 +2456,12 @@ bool ConsoleModel::getInt(const juce::String& path, int& value) const
             return true;
         }
 
+        if (tokens.size() >= 4 && tokens[2] == "config" && tokens[3] == "color")
+        {
+            value = dcaColor[index];
+            return true;
+        }
+
         return false;
     }
 
@@ -2272,7 +2474,7 @@ bool ConsoleModel::getInt(const juce::String& path, int& value) const
 
         if (tokens[2] == "type")
         {
-            value = fx[(size_t) slot].type;
+            value = fx[(size_t) slot].type.load(std::memory_order_relaxed);
             return true;
         }
 
@@ -2300,6 +2502,9 @@ bool ConsoleModel::getInt(const juce::String& path, int& value) const
             value = strip.color;
             return true;
         }
+
+        if (getReturnAssign(strip, tokens, value))
+            return true;
 
         return getMixOn(strip, tokens, 2, value);
     }
@@ -2350,7 +2555,7 @@ bool ConsoleModel::setString(const juce::String& path, const juce::String& value
         if (index < 0)
             return false;
 
-        channelNames[index] = value.substring(0, 12);
+        setChannelName(index, value);
         return true;
     }
 
@@ -2362,6 +2567,61 @@ bool ConsoleModel::setString(const juce::String& path, const juce::String& value
             return false;
 
         setBusName(index, value);
+        return true;
+    }
+
+    if (tokens[0] == "dca" && tokens.size() >= 4 && tokens[2] == "config" && tokens[3] == "name")
+    {
+        const int index = indexOf(tokens[1], numDcas);
+
+        if (index < 0)
+            return false;
+
+        setDcaName(index, value);
+        return true;
+    }
+
+    if (tokens[0] == "mtx" && tokens.size() >= 4 && tokens[2] == "config" && tokens[3] == "name")
+    {
+        const int index = indexOf(tokens[1], numMatrices);
+
+        if (index < 0)
+            return false;
+
+        setMatrixName(index, value);
+        return true;
+    }
+
+    if (tokens[0] == "auxin" && tokens.size() >= 4 && tokens[2] == "config" && tokens[3] == "name")
+    {
+        const int index = indexOf(tokens[1], numAuxIns);
+
+        if (index < 0)
+            return false;
+
+        setAuxName(index, value);
+        return true;
+    }
+
+    if (tokens[0] == "fxrtn" && tokens.size() >= 4 && tokens[2] == "config" && tokens[3] == "name")
+    {
+        const int index = indexOf(tokens[1], numFxReturns);
+
+        if (index < 0)
+            return false;
+
+        setFxReturnName(index, value);
+        return true;
+    }
+
+    if (tokens[0] == "usb" && tokens.size() >= 4 && tokens[2] == "config" && tokens[3] == "name")
+    {
+        const int index = indexOf(tokens[1], numUsbReturns);
+
+        if (index < 0)
+            return false;
+
+        setUsbName(index, value);
         return true;
     }
 
@@ -2419,6 +2679,61 @@ bool ConsoleModel::getString(const juce::String& path, juce::String& value) cons
             return false;
 
         value = busNames[index];
+        return true;
+    }
+
+    if (tokens[0] == "dca" && tokens.size() >= 4 && tokens[2] == "config" && tokens[3] == "name")
+    {
+        const int index = indexOf(tokens[1], numDcas);
+
+        if (index < 0)
+            return false;
+
+        value = dcaNames[index];
+        return true;
+    }
+
+    if (tokens[0] == "mtx" && tokens.size() >= 4 && tokens[2] == "config" && tokens[3] == "name")
+    {
+        const int index = indexOf(tokens[1], numMatrices);
+
+        if (index < 0)
+            return false;
+
+        value = getMatrixName(index);
+        return true;
+    }
+
+    if (tokens[0] == "auxin" && tokens.size() >= 4 && tokens[2] == "config" && tokens[3] == "name")
+    {
+        const int index = indexOf(tokens[1], numAuxIns);
+
+        if (index < 0)
+            return false;
+
+        value = getAuxName(index);
+        return true;
+    }
+
+    if (tokens[0] == "fxrtn" && tokens.size() >= 4 && tokens[2] == "config" && tokens[3] == "name")
+    {
+        const int index = indexOf(tokens[1], numFxReturns);
+
+        if (index < 0)
+            return false;
+
+        value = getFxReturnName(index);
+        return true;
+    }
+
+    if (tokens[0] == "usb" && tokens.size() >= 4 && tokens[2] == "config" && tokens[3] == "name")
+    {
+        const int index = indexOf(tokens[1], numUsbReturns);
+
+        if (index < 0)
+            return false;
+
+        value = getUsbName(index);
         return true;
     }
 

@@ -160,10 +160,10 @@ void FaderScale::paint (juce::Graphics& g)
 ChannelStrip::ChannelStrip (ConsoleModel& modelToUse, MixEngine& engineToUse, int channelIndex)
     : model (modelToUse), engine (engineToUse), index (channelIndex), scale (fader)
 {
-    scribble.setColour (juce::TextButton::buttonColourId, juce::Colour (0xff232830));
-    scribble.setColour (juce::TextButton::textColourOffId, text());
-    scribble.setTooltip ("Select channel");
-    scribble.onClick = [this] { choose(); };
+    scribble.setText (model.getChannelName (index), juce::dontSendNotification);
+    scribble.setTooltip ("Double-click to rename this channel");
+    scribble.onSelect = [this] { choose(); };
+    scribble.onTextChange = [this] { model.setChannelName (index, scribble.getText()); };
     addAndMakeVisible (scribble);
     icon.onClick = [this]
     {
@@ -293,8 +293,8 @@ void ChannelStrip::refresh()
 {
     const auto channelName = model.getChannelName (index);
 
-    if (scribble.getButtonText() != channelName)
-        scribble.setButtonText (channelName);
+    if (! scribble.isBeingEdited() && scribble.getText() != channelName)
+        scribble.setText (channelName, juce::dontSendNotification);
 
     int iconIndex = -1;
     model.getInt (channelLeaf (index, "config/icon"), iconIndex);
@@ -302,7 +302,7 @@ void ChannelStrip::refresh()
     int colour = 6;
     model.getInt (channelLeaf (index, "config/color"), colour);
     icon.setStripColour (colour);
-    scribble.setColour (juce::TextButton::textColourOffId, stripNameColour (colour));
+    scribble.setColour (juce::Label::textColourId, stripNameColour (colour));
 
     if (! stereo.isMouseButtonDown())
     {

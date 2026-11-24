@@ -2,6 +2,7 @@
 
 #include "ui/ChannelStrip.h"
 #include "ui/ChannelEditor.h"
+#include "ui/FxEditor.h"
 
 #include <juce_audio_utils/juce_audio_utils.h>
 #include <juce_gui_extra/juce_gui_extra.h>
@@ -102,6 +103,7 @@ private:
     std::unique_ptr<GroupEditor> groupEditor;
     juce::TextButton bankButton[5];
     juce::Label spareTitle;
+    std::unique_ptr<FxEditor> fxEditor;
     juce::Viewport viewport;
     juce::Label mainLabel { {}, "MAIN" };
     MeterView mainMeter;

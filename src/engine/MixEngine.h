@@ -5,6 +5,7 @@
 #include "model/ConsoleModel.h"
 #include "engine/SharedSource.h"
 #include "engine/ChannelDsp.h"
+#include "engine/FxProcessor.h"
 
 #include <vector>
 
@@ -61,6 +62,7 @@ private:
     juce::int64 durationSamples() const noexcept;
     void processChunk(float* left, float* right, int numSamples, juce::int64 startSample, bool running) noexcept;
     void channelTargets(int index, float& pflL, float& pflR, float& outL, float& outR) const noexcept;
+    void returnGains(int index, float& left, float& right, float& post, float& mono) const noexcept;
     float delayOutput(int index, float sample) noexcept;
 
     ConsoleModel& model;
@@ -71,6 +73,12 @@ private:
     std::array<GroupDsp, numMatrices> matrixDsp;
     GroupDsp mainDsp;
     GroupDsp centerDsp;
+    FxRack fxRack;
+    std::array<float, numFxReturns> returnSmoothL {};
+    std::array<float, numFxReturns> returnSmoothR {};
+    std::array<float, numFxReturns> returnPostSmooth {};
+    std::array<float, numFxReturns> returnMonoSmooth {};
+    std::array<std::array<float, numBuses>, numFxReturns> returnSendSmooth {};
     std::vector<float> processed;
     std::array<StripSmooth, numChannels> smooth {};
     std::array<std::array<float, numBuses>, numChannels> sendSmooth {};

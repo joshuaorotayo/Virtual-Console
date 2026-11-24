@@ -117,6 +117,10 @@ struct MixPoint
 
 struct ReturnStrip : MixPoint
 {
+    std::atomic<int> toMain { 0 };
+    std::atomic<int> toMono { 0 };
+    std::atomic<float> monoLevel { 0.75f };
+    std::atomic<float> sendLevel[numBuses] {};
     int color = 6;
 };
 
@@ -169,14 +173,14 @@ struct Channel : MixPoint
 
 struct FxSlot
 {
-    int type = 0;
+    std::atomic<int> type { 0 };
     std::atomic<int> on { 0 };
-    float par[numFxParams] {};
+    std::atomic<float> par[numFxParams];
 
     FxSlot()
     {
-        for (float& value : par)
-            value = 0.5f;
+        for (auto& value : par)
+            value.store(0.5f, std::memory_order_relaxed);
     }
 };
 

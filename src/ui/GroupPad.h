@@ -1,6 +1,7 @@
 #pragma once
 
 #include "model/ConsoleModel.h"
+#include "ui/StripColour.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
@@ -59,9 +60,15 @@ public:
         {
             const auto bounds = dcaBounds[(size_t) group];
             const bool on = dcaOn[(size_t) group];
-            g.setColour(on ? juce::Colour(0xff3dce4a) : juce::Colour(0xff3a4048));
+            int stored = group;
+            model.getInt("/dca/" + juce::String(group + 1).paddedLeft('0', 2) + "/config/color", stored);
+            const auto colour = stripColourFrom(stored);
+            const bool outlined = stripColourOutlined(stored);
+            g.setColour(on && ! outlined ? colour : juce::Colour(0xff2a3038));
             g.fillEllipse(bounds);
-            g.setColour(on ? juce::Colour(0xff102014) : juce::Colour(0xffd7dde4));
+            g.setColour(stripVisible(colour));
+            g.drawEllipse(bounds.reduced(1.0f), on ? 2.0f : 1.2f);
+            g.setColour(on ? stripIconInk(stored) : juce::Colour(0xffd7dde4));
             g.setFont(juce::Font(juce::FontOptions(juce::jmax(11.0f, bounds.getHeight() * 0.42f))));
             g.drawText(juce::String(group + 1), bounds, juce::Justification::centred);
         }
@@ -119,7 +126,7 @@ public:
         int group = -1;
 
         if (hit(dcaBounds, numDcas, event.position, group))
-            setTooltip("Assign to DCA " + juce::String(group + 1));
+            setTooltip("Assign to " + model.getDcaName(group));
         else if (hit(muteBounds, numMuteGroups, event.position, group))
             setTooltip("Assign to mute group " + juce::String(group + 1));
         else

@@ -59,7 +59,30 @@ private:
     int index = 0;
     bool selected = false;
 
-    juce::TextButton scribble;
+    class NameLabel : public juce::Label
+    {
+    public:
+        std::function<void()> onSelect;
+
+        NameLabel()
+        {
+            setEditable(false, true, false);
+            setJustificationType(juce::Justification::centred);
+            setColour(juce::Label::backgroundColourId, juce::Colour(0xff232830));
+            setColour(juce::Label::textColourId, juce::Colour(0xffe8edf2));
+            setColour(juce::Label::backgroundWhenEditingColourId, juce::Colour(0xff1c2128));
+        }
+
+        void mouseDown(const juce::MouseEvent& event) override
+        {
+            if (event.getNumberOfClicks() == 1 && onSelect != nullptr)
+                onSelect();
+
+            juce::Label::mouseDown(event);
+        }
+    };
+
+    NameLabel scribble;
     ChannelIconButton icon;
     juce::Slider pan;
     MeterView meter;

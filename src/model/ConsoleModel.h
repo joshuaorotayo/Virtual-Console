@@ -22,6 +22,7 @@ public:
     bool getFloat(const juce::String& path, float& value) const;
     bool setInt(const juce::String& path, int value);
     bool getInt(const juce::String& path, int& value) const;
+    void setFxType(int slot, int type);
     bool setString(const juce::String& path, const juce::String& value);
     bool getString(const juce::String& path, juce::String& value) const;
 
@@ -31,6 +32,8 @@ public:
     void mirrorInt(const juce::String& path, int value);
     void duplicateProcessing(int fromIndex, int toIndex, bool includePan);
 
+    const FxSlot& fxSlot(int index) const noexcept { return fx[(size_t) index]; }
+    const ReturnStrip& fxReturn(int index) const noexcept { return fxReturns[(size_t) index]; }
     Channel& channel(int index) noexcept { return channels[(size_t) index]; }
     const Channel& channel(int index) const noexcept { return channels[(size_t) index]; }
 
@@ -90,6 +93,16 @@ public:
     void setChannelName(int index, const juce::String& name);
     juce::String getBusName(int index) const;
     void setBusName(int index, const juce::String& name);
+    juce::String getDcaName(int index) const;
+    void setDcaName(int index, const juce::String& name);
+    juce::String getMatrixName(int index) const;
+    void setMatrixName(int index, const juce::String& name);
+    juce::String getAuxName(int index) const;
+    void setAuxName(int index, const juce::String& name);
+    juce::String getFxReturnName(int index) const;
+    void setFxReturnName(int index, const juce::String& name);
+    juce::String getUsbName(int index) const;
+    void setUsbName(int index, const juce::String& name);
 
     bool isChannelLinked(int channelIndex) const noexcept;
     void setChannelLinked(int channelIndex, bool linked);
@@ -180,7 +193,9 @@ private:
     juce::String matrixNames[numMatrices];
     juce::String fxReturnNames[numFxReturns];
     juce::String auxNames[numAuxIns];
+    juce::String usbNames[numUsbReturns];
     juce::String dcaNames[numDcas];
+    int dcaColor[numDcas] {};
 
     struct Source
     {

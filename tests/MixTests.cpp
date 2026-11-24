@@ -460,6 +460,20 @@ public:
         beginTest ("a DCA and a mute group scale the assigned strip");
         {
             ConsoleModel model;
+            expect (model.setString ("/dca/01/config/name", "Vocals"));
+            expectEquals (model.getDcaName (0), juce::String ("Vocals"));
+            expect (model.setString ("/mtx/01/config/name", "Drums"));
+            expectEquals (model.getMatrixName (0), juce::String ("Drums"));
+            expect (model.setString ("/auxin/01/config/name", "Click"));
+            expectEquals (model.getAuxName (0), juce::String ("Click"));
+            expect (model.setString ("/usb/02/config/name", "Player"));
+            expectEquals (model.getUsbName (1), juce::String ("Player"));
+            expect (model.setString ("/fxrtn/01/config/name", "Hall L"));
+            expectEquals (model.getFxReturnName (0), juce::String ("Hall L"));
+            expect (model.setInt ("/dca/01/config/color", 9));
+            int dcaColour = 0;
+            expect (model.getInt ("/dca/01/config/color", dcaColour));
+            expectEquals (dcaColour, 9);
             MixEngine engine (model);
             engine.prepareToPlay (32, 48000.0);
             const int source = engine.adoptMemorySource (std::vector<float> (160, 1.0f), 48000.0, "dca");
@@ -630,6 +644,54 @@ public:
                 model.setFloat ("/ch/01/mix/pan", 0.5f);
             });
             expectWithinAbsoluteError (direct.back(), 1.0f, 0.05f, "a post-fader direct out reaches output 1");
+        }
+
+        beginTest ("a bus 13 send returns through FX 1");
+        {
+            ConsoleModel model;
+            expectEquals (model.getBusName (12), juce::String ("Vintage Room"));
+            int type = 0;
+            expect (model.getInt ("/fx/01/type", type));
+            expectEquals (type, (int) FxAlgo::vintageRoom);
+            int assigned = 0;
+            expect (model.getInt ("/fxrtn/01/mix/st", assigned));
+            expectEquals (assigned, 1);
+
+            MixEngine engine (model);
+            engine.prepareToPlay (32, 48000.0);
+            const int source = engine.adoptMemorySource (std::vector<float> (256, 1.0f), 48000.0, "fx");
+            routeSource (model, source, 0, { 0 });
+            expect (model.setFloat ("/ch/01/mix/pan", 0.0f));
+            expect (model.setInt ("/ch/01/mix/st", 0));
+            expect (model.setFloat ("/ch/01/mix/13/level", 0.75f));
+            expect (model.setInt ("/fx/01/type", (int) FxAlgo::stereoDelay));
+            expect (model.setFloat ("/fx/01/par/01", 0.0f));
+            expect (model.setFloat ("/fx/01/par/02", 0.0f));
+            engine.play();
+            engine.snapSmoothers();
+            auto block = renderBlock (engine, 32);
+            expectWithinAbsoluteError (block.left[8], 1.0f, 0.02f, "zero-time delay returns the send");
+            expectWithinAbsoluteError (block.right[8], 0.0f, 0.02f);
+
+            expect (model.setInt ("/fxrtn/01/mix/on", 0));
+            engine.snapSmoothers();
+            block = renderBlock (engine, 32);
+            expectWithinAbsoluteError (block.left[8], 0.0f, 0.02f, "muting the return removes the effect");
+
+            expect (model.setInt ("/fxrtn/01/mix/on", 1));
+            expect (model.setInt ("/bus/13/mix/on", 0));
+            engine.snapSmoothers();
+            block = renderBlock (engine, 32);
+            expectWithinAbsoluteError (block.left[8], 0.0f, 0.02f, "muting the send bus cuts the effect");
+
+            expect (model.setInt ("/bus/13/mix/on", 1));
+            expect (model.setInt ("/fxrtn/01/mix/st", 0));
+            expect (model.setInt ("/fxrtn/01/mix/mono", 1));
+            expect (model.setInt ("/main/m/mix/st", 1));
+            engine.snapSmoothers();
+            block = renderBlock (engine, 32);
+            expectWithinAbsoluteError (block.left[8], 0.7071f, 0.03f, "mono assign folds the return into stereo");
+            expectWithinAbsoluteError (block.right[8], 0.7071f, 0.03f);
         }
     }
 

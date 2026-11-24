@@ -344,11 +344,10 @@ public:
     MatrixStrip (ConsoleModel& modelToUse, int matrixIndex)
         : model (modelToUse), index (matrixIndex), scale (fader)
     {
-        scribble.setButtonText ("Mtx " + juce::String (index + 1));
-        scribble.setColour (juce::TextButton::buttonColourId, juce::Colour (0xff232830));
-        scribble.setColour (juce::TextButton::textColourOffId, text());
-        scribble.setTooltip ("Edit this matrix");
-        scribble.onClick = [this] { if (onSelect != nullptr) onSelect(); };
+        scribble.setText (model.getMatrixName (index), juce::dontSendNotification);
+        scribble.setTooltip ("Double-click to rename this matrix");
+        scribble.onSelect = [this] { if (onSelect != nullptr) onSelect(); };
+        scribble.onTextChange = [this] { model.setMatrixName (index, scribble.getText()); };
         addAndMakeVisible (scribble);
         colourIcon.setTooltip ("Double-click to choose this matrix colour");
         colourIcon.onClick = [this] { if (onSelect != nullptr) onSelect(); };
@@ -400,7 +399,11 @@ public:
         int colour = index % 8;
         model.getInt (leaf ("config/color"), colour);
         colourIcon.setStored (colour);
-        scribble.setColour (juce::TextButton::textColourOffId, stripNameColour (colour));
+
+        if (! scribble.isBeingEdited())
+            scribble.setText (model.getMatrixName (index), juce::dontSendNotification);
+
+        scribble.setColour (juce::Label::textColourId, stripNameColour (colour));
     }
 
     void paint (juce::Graphics& g) override
@@ -465,7 +468,7 @@ private:
     ConsoleModel& model;
     int index = 0;
     bool selected = false;
-    juce::TextButton scribble;
+    StripName scribble;
     ColourIcon colourIcon;
     ConsoleFader fader;
     FaderScale scale;
@@ -565,7 +568,7 @@ public:
             addAndMakeVisible (button);
 
             auto& title = names[(size_t) matrix];
-            title.setText ("Mtx " + juce::String (matrix + 1), juce::dontSendNotification);
+            title.setText (model.getMatrixName (matrix), juce::dontSendNotification);
             title.setJustificationType (juce::Justification::centred);
             title.setColour (juce::Label::textColourId, dim());
             addAndMakeVisible (title);
@@ -649,6 +652,13 @@ private:
                 model.getInt (tapPath (matrix), tap);
 
             pre[(size_t) matrix].setToggleState (tap != 0, juce::dontSendNotification);
+            names[(size_t) matrix].setText (model.getMatrixName (matrix), juce::dontSendNotification);
+        }
+
+        if (! source.isPopupActive())
+        {
+            for (int bus = 0; bus < numBuses; ++bus)
+                source.changeItemText (bus + 2, model.getBusName (bus));
         }
 
         applying = false;
@@ -859,11 +869,18 @@ public:
     DcaStrip (ConsoleModel& modelToUse, int dcaIndex)
         : model (modelToUse), index (dcaIndex), scale (fader)
     {
-        scribble.setButtonText ("DCA " + juce::String (index + 1));
-        scribble.setColour (juce::TextButton::buttonColourId, juce::Colour (0xff232830));
-        scribble.setColour (juce::TextButton::textColourOffId, text());
-        scribble.setInterceptsMouseClicks (false, false);
+        scribble.setText (model.getDcaName (index), juce::dontSendNotification);
+        scribble.setTooltip ("Double-click to rename this DCA");
+        scribble.onSelect = [this] { if (onSelect != nullptr) onSelect(); };
+        scribble.onTextChange = [this] { model.setDcaName (index, scribble.getText()); };
         addAndMakeVisible (scribble);
+        colourIcon.setTooltip ("Double-click to choose this DCA colour");
+        colourIcon.onClick = [this] { if (onSelect != nullptr) onSelect(); };
+        colourIcon.onDoubleClick = [this]
+        {
+            openStripColourPicker (colourIcon, model, path ("config/color"), [this] { refresh(); });
+        };
+        addAndMakeVisible (colourIcon);
 
         fader.setSliderStyle (juce::Slider::LinearVertical);
         fader.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 46, 16);
@@ -920,6 +937,20 @@ public:
             model.getInt (path ("solo"), enabled);
             solo.setToggleState (enabled != 0, juce::dontSendNotification);
         }
+
+        if (! scribble.isBeingEdited() && scribble.getText() != model.getDcaName (index))
+            scribble.setText (model.getDcaName (index), juce::dontSendNotification);
+
+        int colour = index;
+        model.getInt (path ("config/color"), colour);
+        colourIcon.setStored (colour);
+        scribble.setColour (juce::Label::textColourId, stripNameColour (colour));
+    }
+
+    void setSelected (bool shouldSelect)
+    {
+        selected = shouldSelect;
+        repaint();
     }
 
     void paint (juce::Graphics& g) override
@@ -928,15 +959,25 @@ public:
         auto bounds = getLocalBounds().reduced (3).toFloat();
         g.setColour (juce::Colour (0xff2a313a));
         g.fillRoundedRectangle (bounds, 6.0f);
-        g.setColour (juce::Colour (0xffd2b84a));
+        int colour = index;
+        model.getInt (path ("config/color"), colour);
+        g.setColour (stripColourFrom (colour));
         g.fillRoundedRectangle (8.0f, 8.0f, (float) getWidth() - 16.0f, 4.0f, 2.0f);
+
+        if (selected)
+        {
+            g.setColour (stripColourFrom (colour));
+            g.drawRoundedRectangle (bounds, 6.0f, 2.0f);
+        }
     }
 
     void resized() override
     {
         auto area = getLocalBounds().reduced (5);
         area.removeFromTop (12);
-        scribble.setBounds (area.removeFromTop (28).reduced (2, 0));
+        auto nameRow = area.removeFromTop (28);
+        colourIcon.setBounds (nameRow.removeFromLeft (28).reduced (1, 1));
+        scribble.setBounds (nameRow.reduced (2, 0));
         auto buttons = area.removeFromBottom (26);
         mute.setBounds (buttons.removeFromLeft (buttons.getWidth() / 2).reduced (1, 0));
         solo.setBounds (buttons.reduced (1, 0));
@@ -961,7 +1002,9 @@ private:
 
     ConsoleModel& model;
     int index = 0;
-    juce::TextButton scribble;
+    bool selected = false;
+    StripName scribble;
+    ColourIcon colourIcon;
     ConsoleFader fader;
     FaderScale scale;
     juce::TextButton mute { "M" };
@@ -1003,13 +1046,15 @@ private:
 class SpareStrip : public juce::Component
 {
 public:
-    SpareStrip(ConsoleModel& modelToUse, const juce::String& pathRoot, const juce::String& name)
+    SpareStrip(ConsoleModel& modelToUse, const juce::String& pathRoot)
         : model(modelToUse), root(pathRoot), scale(fader)
     {
-        scribble.setButtonText(name);
-        scribble.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff232830));
-        scribble.setColour(juce::TextButton::textColourOffId, text());
-        scribble.setInterceptsMouseClicks(false, false);
+        juce::String stored;
+        model.getString(root + "/config/name", stored);
+        scribble.setText(stored, juce::dontSendNotification);
+        scribble.setTooltip("Double-click to rename");
+        scribble.onSelect = [this] { if (onSelect != nullptr) onSelect(); };
+        scribble.onTextChange = [this] { model.setString(root + "/config/name", scribble.getText()); };
         addAndMakeVisible(scribble);
         colourIcon.setTooltip("Double-click to choose this colour");
         colourIcon.onClick = [this] { if (onSelect != nullptr) onSelect(); };
@@ -1042,6 +1087,16 @@ public:
         mute.setTooltip("Mute");
         mute.onClick = [this] { model.setInt(root + "/mix/on", mute.getToggleState() ? 0 : 1); };
         addAndMakeVisible(mute);
+        toMain.setClickingTogglesState(true);
+        toMono.setClickingTogglesState(true);
+        toMain.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xff3d6f8f));
+        toMono.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xff3d6f8f));
+        toMain.setTooltip("Assign this side to main LR");
+        toMono.setTooltip("Assign this side to the center bus");
+        toMain.onClick = [this] { model.setInt(root + "/mix/st", toMain.getToggleState() ? 1 : 0); };
+        toMono.onClick = [this] { model.setInt(root + "/mix/mono", toMono.getToggleState() ? 1 : 0); };
+        addAndMakeVisible(toMain);
+        addAndMakeVisible(toMono);
         refresh();
     }
 
@@ -1061,10 +1116,32 @@ public:
             mute.setToggleState(enabled == 0, juce::dontSendNotification);
         }
 
+        if (! toMain.isMouseButtonDown())
+        {
+            int assigned = 0;
+            model.getInt(root + "/mix/st", assigned);
+            toMain.setToggleState(assigned != 0, juce::dontSendNotification);
+        }
+
+        if (! toMono.isMouseButtonDown())
+        {
+            int assigned = 0;
+            model.getInt(root + "/mix/mono", assigned);
+            toMono.setToggleState(assigned != 0, juce::dontSendNotification);
+        }
+
         int colour = 6;
         model.getInt(root + "/config/color", colour);
         colourIcon.setStored(colour);
-        scribble.setColour(juce::TextButton::textColourOffId, stripNameColour(colour));
+
+        if (! scribble.isBeingEdited())
+        {
+            juce::String stored;
+            model.getString(root + "/config/name", stored);
+            scribble.setText(stored, juce::dontSendNotification);
+        }
+
+        scribble.setColour(juce::Label::textColourId, stripNameColour(colour));
     }
 
     void setSelected(bool shouldSelect)
@@ -1105,6 +1182,9 @@ public:
         colourIcon.setBounds(nameRow.removeFromLeft(28).reduced(1, 1));
         scribble.setBounds(nameRow.reduced(2, 0));
         mute.setBounds(area.removeFromBottom(26).reduced(18, 0));
+        auto assign = area.removeFromBottom(22);
+        toMono.setBounds(assign.removeFromRight(assign.getWidth() / 2).reduced(2, 1));
+        toMain.setBounds(assign.reduced(2, 1));
         area.removeFromBottom(2);
         scale.setBounds(area.removeFromLeft(36));
         fader.setBounds(area.reduced(1, 0));
@@ -1116,11 +1196,13 @@ private:
     ConsoleModel& model;
     juce::String root;
     bool selected = false;
-    juce::TextButton scribble;
+    StripName scribble;
     ColourIcon colourIcon;
     ConsoleFader fader;
     FaderScale scale;
     juce::TextButton mute { "M" };
+    juce::TextButton toMain { "ST" };
+    juce::TextButton toMono { "MO" };
 };
 
 class FaderBay : public juce::Component
@@ -1142,17 +1224,15 @@ public:
         for (int i = 0; i < numAuxIns; ++i)
         {
             const auto path = "/auxin/" + juce::String(i + 1).paddedLeft('0', 2);
-            aux[(size_t) i] = std::make_unique<SpareStrip>(model, path, "Aux " + juce::String(i + 1));
+            aux[(size_t) i] = std::make_unique<SpareStrip>(model, path);
             addChildComponent(*aux[(size_t) i]);
             aux[(size_t) i]->onSelect = [this, i] { if (onSpare != nullptr) onSpare(0, i); };
         }
 
-        static const char* usbNames[] = { "USB L", "USB R" };
-
         for (int i = 0; i < numUsbReturns; ++i)
         {
             const auto path = "/usb/" + juce::String(i + 1).paddedLeft('0', 2);
-            usb[(size_t) i] = std::make_unique<SpareStrip>(model, path, usbNames[i]);
+            usb[(size_t) i] = std::make_unique<SpareStrip>(model, path);
             addChildComponent(*usb[(size_t) i]);
             usb[(size_t) i]->onSelect = [this, i] { if (onSpare != nullptr) onSpare(1, i); };
         }
@@ -1160,8 +1240,7 @@ public:
         for (int i = 0; i < numFxReturns; ++i)
         {
             const auto path = "/fxrtn/" + juce::String(i + 1).paddedLeft('0', 2);
-            const auto name = "FX" + juce::String(i / 2 + 1) + (i % 2 == 0 ? " L" : " R");
-            fx[(size_t) i] = std::make_unique<SpareStrip>(model, path, name);
+            fx[(size_t) i] = std::make_unique<SpareStrip>(model, path);
             addChildComponent(*fx[(size_t) i]);
             fx[(size_t) i]->onSelect = [this, i] { if (onSpare != nullptr) onSpare(2, i); };
         }
@@ -1215,7 +1294,7 @@ public:
                 add(strip.get());
 
             if (busesToo)
-                for (int i = 0; i < 4; ++i)
+                for (int i = 12; i < 16; ++i)
                     add(buses[(size_t) i].get());
         };
 
@@ -1365,6 +1444,9 @@ public:
 
         for (int i = 0; i < numFxReturns; ++i)
             fx[(size_t) i]->setSelected(kind == 2 && i == index);
+
+        for (int i = 0; i < numDcas; ++i)
+            dcas[(size_t) i]->setSelected(kind == 3 && i == index);
     }
 
     int xFor(juce::Component* component) const
@@ -1415,6 +1497,9 @@ private:
 
         for (auto& strip : fx)
             strip->setSelected(false);
+
+        for (auto& strip : dcas)
+            strip->setSelected(false);
     }
 
     Bank bank = Bank::ch1;
@@ -1440,7 +1525,7 @@ public:
         title.setEditable (false, true, false);
         title.onTextChange = [this]
         {
-            if (root.startsWith ("/bus/"))
+            if (root.startsWith ("/bus/") || root.startsWith ("/mtx/"))
                 model.setString (root + "/config/name", title.getText());
         };
         addAndMakeVisible (title);
@@ -1518,7 +1603,7 @@ public:
         for (int matrix = 0; matrix < numMatrices; ++matrix)
         {
             auto& name = matrixName[(size_t) matrix];
-            name.setText ("Mtx " + juce::String (matrix + 1), juce::dontSendNotification);
+            name.setText (model.getMatrixName (matrix), juce::dontSendNotification);
             name.setColour (juce::Label::textColourId, text());
             name.setJustificationType (juce::Justification::centredLeft);
             addAndMakeVisible (name);
@@ -1567,7 +1652,7 @@ public:
 
         juce::String shown = root == "/main/st" ? "Main LR" : root == "/main/m" ? "Center" : stripTitle;
 
-        if (root.startsWith ("/bus/"))
+        if (root.startsWith ("/bus/") || root.startsWith ("/mtx/"))
         {
             juce::String custom;
             model.getString (root + "/config/name", custom);
@@ -1646,6 +1731,7 @@ public:
         for (int matrix = 0; matrix < numMatrices; ++matrix)
         {
             matrixName[(size_t) matrix].setVisible (feedsMatrices);
+            matrixName[(size_t) matrix].setText (model.getMatrixName (matrix), juce::dontSendNotification);
             matrixLevel[(size_t) matrix].setVisible (feedsMatrices);
             matrixPre[(size_t) matrix].setVisible (bus);
 
@@ -1700,7 +1786,7 @@ public:
             for (int matrix = 0; matrix < numMatrices; ++matrix)
             {
                 auto row = column.removeFromTop (rowHeight).reduced (0, 1);
-                matrixName[(size_t) matrix].setBounds (row.removeFromLeft (46));
+                matrixName[(size_t) matrix].setBounds (row.removeFromLeft (72));
 
                 if (bus)
                     matrixPre[(size_t) matrix].setBounds (row.removeFromRight (44).reduced (1, 2));
@@ -1731,7 +1817,7 @@ private:
     void setRoot (const juce::String& newRoot)
     {
         root = newRoot;
-        title.setEditable (false, root.startsWith ("/bus/"), false);
+        title.setEditable (false, root.startsWith ("/bus/") || root.startsWith ("/mtx/"), false);
         refresh();
         resized();
     }
@@ -2030,6 +2116,8 @@ MainComponent::MainComponent()
     spareTitle.setFont (juce::Font (juce::FontOptions (18.0f)));
     spareTitle.setColour (juce::Label::textColourId, text());
     addChildComponent (spareTitle);
+    fxEditor = std::make_unique<FxEditor> (model);
+    addChildComponent (*fxEditor);
 
     const char* bankNames[] = { "All", "1-16", "17-32", "Aux FX", "BUS MTX" };
     const int bankIds[] = { (int) FaderBay::Bank::all, (int) FaderBay::Bank::ch1, (int) FaderBay::Bank::ch17,
@@ -2210,6 +2298,7 @@ void MainComponent::resized()
         groupEditor->setVisible (false);
         matrixEditor->setVisible (false);
         spareTitle.setVisible (false);
+        fxEditor->setVisible (false);
         viewport.setVisible (false);
         mainFader.setVisible (false);
         mainMeter.setVisible (false);
@@ -2265,6 +2354,7 @@ void MainComponent::resized()
     groupEditor->setVisible (showBus);
     matrixEditor->setVisible (showMatrix);
     spareTitle.setVisible (showSpare);
+    fxEditor->setVisible (false);
 
     if (sourcesOpen)
     {
@@ -2283,7 +2373,14 @@ void MainComponent::resized()
     }
     else if (showSpare)
     {
-        spareTitle.setBounds (topHalf.reduced (24, 24));
+        const bool effect = spareKind == 2;
+        spareTitle.setVisible (! effect);
+        fxEditor->setVisible (effect);
+
+        if (effect)
+            fxEditor->setBounds (topHalf.reduced (8, 6));
+        else
+            spareTitle.setBounds (topHalf.reduced (24, 24));
     }
     else
     {
@@ -2399,15 +2496,22 @@ void MainComponent::selectSpare (int kind, int index)
     juce::String name;
 
     if (kind == 0)
-        name = "Aux " + juce::String (index + 1);
+        name = model.getAuxName (index);
     else if (kind == 1)
-        name = index == 0 ? "USB L" : "USB R";
+        name = model.getUsbName (index);
     else if (kind == 2)
-        name = "FX" + juce::String (index / 2 + 1) + (index % 2 == 0 ? " L" : " R");
+        name = model.getFxReturnName (index);
     else
-        name = "DCA " + juce::String (index + 1);
+        name = model.getDcaName (index);
 
-    spareTitle.setText (name + " is on the fader bank. Effects and USB playback are not mixed yet.", juce::dontSendNotification);
+    if (kind == 2)
+        fxEditor->setReturn (index);
+    else if (kind == 0)
+        spareTitle.setText (name + " is on the fader bank. Aux playback is not mixed yet. Stereo and Mono are stored for when it is.", juce::dontSendNotification);
+    else if (kind == 1)
+        spareTitle.setText (name + " is on the fader bank. USB playback is not mixed yet. Stereo and Mono are stored for when it is.", juce::dontSendNotification);
+    else
+        spareTitle.setText (name + " is on the fader bank.", juce::dontSendNotification);
 
     if (changed)
         resized();
@@ -2520,6 +2624,9 @@ void MainComponent::timerCallback()
 
     if (routingOpen && routingBoard != nullptr)
         routingBoard->refresh();
+
+    if (fxEditor != nullptr && fxEditor->isVisible())
+        fxEditor->refresh();
 }
 
 void MainComponent::closeTopPages()

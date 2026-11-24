@@ -26,6 +26,7 @@ set(VC_CORE_SOURCES
     src/engine/SharedSource.cpp
     src/engine/MixEngine.cpp
     src/engine/ChannelDsp.cpp
+    src/engine/FxProcessor.cpp
 )
 
 function(vc_configure_target target)
@@ -56,6 +57,7 @@ target_sources(VirtualConsole PRIVATE
     src/ui/RoutingBoard.cpp
     src/ui/ChannelStrip.cpp
     src/ui/ChannelEditor.cpp
+    src/ui/FxEditor.cpp
     ${VC_CORE_SOURCES}
 )
 

@@ -213,6 +213,7 @@ void MixEngine::prepareToPlay(int samplesPerBlockExpected, double newSampleRate)
 
     mainDsp.prepare(sampleRate);
     centerDsp.prepare(sampleRate);
+    fxRack.prepare(sampleRate);
 
     const int delayCapacity = std::max(2, (int) std::lround(sampleRate * 0.5) + 1);
 
@@ -527,6 +528,23 @@ void MixEngine::snapSmoothers() noexcept
     const float mainFader = faderToGain(model.mainStereo().fader.load(std::memory_order_relaxed));
     const float mainOn = model.mainStereo().on.load(std::memory_order_relaxed) != 0 ? 1.0f : 0.0f;
     mainGain = mainFader * mainOn;
+
+    for (int ret = 0; ret < numFxReturns; ++ret)
+    {
+        float left = 0.0f;
+        float right = 0.0f;
+        float post = 0.0f;
+        float mono = 0.0f;
+        returnGains(ret, left, right, post, mono);
+        returnSmoothL[(size_t) ret] = left;
+        returnSmoothR[(size_t) ret] = right;
+        returnPostSmooth[(size_t) ret] = post;
+        returnMonoSmooth[(size_t) ret] = mono;
+
+        for (int bus = 0; bus < numBuses; ++bus)
+            returnSendSmooth[(size_t) ret][(size_t) bus] = faderToGain(model.fxReturn(ret).sendLevel[bus].load(std::memory_order_relaxed));
+    }
+
     const float monoFader = faderToGain(model.mainCenter().fader.load(std::memory_order_relaxed));
     const float monoOn = model.mainCenter().on.load(std::memory_order_relaxed) != 0 ? 1.0f : 0.0f;
     mainMonoGain = monoFader * monoOn;
@@ -534,6 +552,21 @@ void MixEngine::snapSmoothers() noexcept
     const auto listen = model.getListenMode();
     const bool wantSolo = listen == ListenMode::solo || (listen == ListenMode::automatic && anySolo);
     listenFade = wantSolo ? 1.0f : 0.0f;
+}
+
+void MixEngine::returnGains(int index, float& left, float& right, float& post, float& mono) const noexcept
+{
+    const auto& strip = model.fxReturn(index);
+    const float pan = strip.pan.load(std::memory_order_relaxed);
+    const float balanceL = pan <= 0.5f ? 1.0f : std::clamp((1.0f - pan) * 2.0f, 0.0f, 1.0f);
+    const float balanceR = pan >= 0.5f ? 1.0f : std::clamp(pan * 2.0f, 0.0f, 1.0f);
+    const float gain = faderToGain(strip.fader.load(std::memory_order_relaxed))
+                     * (strip.on.load(std::memory_order_relaxed) != 0 ? 1.0f : 0.0f);
+    left = balanceL * gain;
+    right = balanceR * gain;
+    post = gain;
+    mono = faderToGain(strip.monoLevel.load(std::memory_order_relaxed))
+         * (strip.toMono.load(std::memory_order_relaxed) != 0 ? 1.0f : 0.0f);
 }
 
 float MixEngine::delayOutput(int index, float sample) noexcept
@@ -716,6 +749,23 @@ void MixEngine::processChunk(float* left, float* right, int numSamples, juce::in
         }
     }
 
+    std::array<float, numFxReturns> returnTargetL {};
+    std::array<float, numFxReturns> returnTargetR {};
+    std::array<float, numFxReturns> returnPostTarget {};
+    std::array<float, numFxReturns> returnMonoTarget {};
+    std::array<char, numFxReturns> returnToMain {};
+    std::array<std::array<float, numBuses>, numFxReturns> returnSendTarget {};
+
+    for (int ret = 0; ret < numFxReturns; ++ret)
+    {
+        returnGains(ret, returnTargetL[(size_t) ret], returnTargetR[(size_t) ret],
+                    returnPostTarget[(size_t) ret], returnMonoTarget[(size_t) ret]);
+        returnToMain[(size_t) ret] = model.fxReturn(ret).toMain.load(std::memory_order_relaxed) != 0 ? 1 : 0;
+
+        for (int bus = 0; bus < numBuses; ++bus)
+            returnSendTarget[(size_t) ret][(size_t) bus] = faderToGain(model.fxReturn(ret).sendLevel[bus].load(std::memory_order_relaxed));
+    }
+
     std::array<float, numMatrices> matrixTarget {};
     std::array<char, numMatrices> matrixInsertPost {};
     std::array<float, numMatrices> mainStereoMatrixTarget {};
@@ -863,7 +913,7 @@ void MixEngine::processChunk(float* left, float* right, int numSamples, juce::in
             }
         }
 
-        for (int bus = 0; bus < numBuses; ++bus)
+        auto finishBus = [&](int bus)
         {
             busDsp[(size_t) bus].process(busSumL[(size_t) bus], busSumR[(size_t) bus]);
             busSmoothL[(size_t) bus] += (busTargetL[(size_t) bus] - busSmoothL[(size_t) bus]) * smoothCoeff;
@@ -876,8 +926,8 @@ void MixEngine::processChunk(float* left, float* right, int numSamples, juce::in
 
             if (busToMain[(size_t) bus] != 0)
             {
-                mainBufL[(size_t) sample] += busSumL[(size_t) bus] * busSmoothL[(size_t) bus];
-                mainBufR[(size_t) sample] += busSumR[(size_t) bus] * busSmoothR[(size_t) bus];
+                mainBufL[(size_t) sample] += busOutL[(size_t) bus];
+                mainBufR[(size_t) sample] += busOutR[(size_t) bus];
             }
 
             const float busMono = 0.5f * (busSumL[(size_t) bus] + busSumR[(size_t) bus]);
@@ -885,10 +935,56 @@ void MixEngine::processChunk(float* left, float* right, int numSamples, juce::in
 
             if (busDcaSolo[(size_t) bus] != 0)
             {
-                soloBufL[(size_t) sample] += busSumL[(size_t) bus] * busSmoothL[(size_t) bus];
-                soloBufR[(size_t) sample] += busSumR[(size_t) bus] * busSmoothR[(size_t) bus];
+                soloBufL[(size_t) sample] += busOutL[(size_t) bus];
+                soloBufR[(size_t) sample] += busOutR[(size_t) bus];
+            }
+        };
+
+        for (int slot = 0; slot < 4; ++slot)
+            finishBus(12 + slot);
+
+        for (int ret = 0; ret < numFxReturns; ++ret)
+        {
+            returnSmoothL[(size_t) ret] += (returnTargetL[(size_t) ret] - returnSmoothL[(size_t) ret]) * smoothCoeff;
+            returnSmoothR[(size_t) ret] += (returnTargetR[(size_t) ret] - returnSmoothR[(size_t) ret]) * smoothCoeff;
+            returnPostSmooth[(size_t) ret] += (returnPostTarget[(size_t) ret] - returnPostSmooth[(size_t) ret]) * smoothCoeff;
+            returnMonoSmooth[(size_t) ret] += (returnMonoTarget[(size_t) ret] - returnMonoSmooth[(size_t) ret]) * smoothCoeff;
+
+            for (int bus = 0; bus < 12; ++bus)
+                returnSendSmooth[(size_t) ret][(size_t) bus] += (returnSendTarget[(size_t) ret][(size_t) bus] - returnSendSmooth[(size_t) ret][(size_t) bus]) * smoothCoeff;
+        }
+
+        for (int slot = 0; slot < 4; ++slot)
+        {
+            float wetL = 0.0f;
+            float wetR = 0.0f;
+            fxRack.process(slot, model.fxSlot(slot), busOutL[(size_t) (12 + slot)], busOutR[(size_t) (12 + slot)], wetL, wetR);
+            const float side[2] = { wetL, wetR };
+
+            for (int sideIndex = 0; sideIndex < 2; ++sideIndex)
+            {
+                const int ret = slot * 2 + sideIndex;
+                const float wet = side[(size_t) sideIndex];
+
+                if (returnToMain[(size_t) ret] != 0)
+                {
+                    mainBufL[(size_t) sample] += wet * returnSmoothL[(size_t) ret];
+                    mainBufR[(size_t) sample] += wet * returnSmoothR[(size_t) ret];
+                }
+
+                monoSum += wet * returnPostSmooth[(size_t) ret] * returnMonoSmooth[(size_t) ret];
+
+                for (int bus = 0; bus < 12; ++bus)
+                {
+                    const float send = returnSendSmooth[(size_t) ret][(size_t) bus];
+                    busSumL[(size_t) bus] += wet * returnSmoothL[(size_t) ret] * send;
+                    busSumR[(size_t) bus] += wet * returnSmoothR[(size_t) ret] * send;
+                }
             }
         }
+
+        for (int bus = 0; bus < 12; ++bus)
+            finishBus(bus);
 
         mainGain += (mainTarget - mainGain) * smoothCoeff;
         const float mainMonoTarget = faderToGain(model.mainCenter().fader.load(std::memory_order_relaxed))
