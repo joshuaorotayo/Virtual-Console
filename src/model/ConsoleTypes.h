@@ -68,6 +68,7 @@ struct MixPoint
     std::atomic<float> fader { 0.75f };
     std::atomic<float> pan { 0.5f };
     std::atomic<int> on { 1 };
+    std::atomic<int> eqMaster { 1 };
     EqBand eq[numEqBands] {};
     Dynamics comp {};
 };

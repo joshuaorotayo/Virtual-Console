@@ -66,6 +66,10 @@ private:
     juce::SpinLock sourceLock;
     std::array<SharedSource, maxSources> sources;
     std::array<ChannelDsp, numChannels> channelDsp;
+    std::array<GroupDsp, numBuses> busDsp;
+    std::array<GroupDsp, numMatrices> matrixDsp;
+    GroupDsp mainDsp;
+    GroupDsp centerDsp;
     std::vector<float> processed;
     std::array<StripSmooth, numChannels> smooth {};
     std::array<std::array<float, numBuses>, numChannels> sendSmooth {};

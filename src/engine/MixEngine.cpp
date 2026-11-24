@@ -42,6 +42,15 @@ void MixEngine::prepareToPlay(int samplesPerBlockExpected, double newSampleRate)
     for (auto& strip : channelDsp)
         strip.prepare(sampleRate);
 
+    for (auto& group : busDsp)
+        group.prepare(sampleRate);
+
+    for (auto& group : matrixDsp)
+        group.prepare(sampleRate);
+
+    mainDsp.prepare(sampleRate);
+    centerDsp.prepare(sampleRate);
+
     for (int i = 0; i < model.getNumSources(); ++i)
         sources[(size_t) i].prepare(sampleRate);
 }
@@ -503,6 +512,16 @@ void MixEngine::processChunk(float* left, float* right, int numSamples, juce::in
     const float mainTarget = faderToGain(model.mainStereo().fader.load(std::memory_order_relaxed))
                            * (model.mainStereo().on.load(std::memory_order_relaxed) != 0 ? 1.0f : 0.0f);
 
+    for (int bus = 0; bus < numBuses; ++bus)
+        busDsp[(size_t) bus].configure(model.bus(bus));
+
+    for (int matrix = 0; matrix < numMatrices; ++matrix)
+        matrixDsp[(size_t) matrix].configure(model.matrix(matrix));
+
+    mainDsp.configure(model.mainStereo());
+    centerDsp.configure(model.mainCenter());
+    const bool foldCenter = model.centerFeedsStereo();
+
     std::array<float, numChannels> peaks {};
 
     for (int sample = 0; sample < numSamples; ++sample)
@@ -577,6 +596,7 @@ void MixEngine::processChunk(float* left, float* right, int numSamples, juce::in
 
         for (int bus = 0; bus < numBuses; ++bus)
         {
+            busDsp[(size_t) bus].process(busSumL[(size_t) bus], busSumR[(size_t) bus]);
             busSmoothL[(size_t) bus] += (busTargetL[(size_t) bus] - busSmoothL[(size_t) bus]) * smoothCoeff;
             busSmoothR[(size_t) bus] += (busTargetR[(size_t) bus] - busSmoothR[(size_t) bus]) * smoothCoeff;
             busPostSmooth[(size_t) bus] += (busPostTarget[(size_t) bus] - busPostSmooth[(size_t) bus]) * smoothCoeff;
@@ -598,6 +618,10 @@ void MixEngine::processChunk(float* left, float* right, int numSamples, juce::in
         mainMonoGain += (mainMonoTarget - mainMonoGain) * smoothCoeff;
 
         constexpr float centerGain = 0.70710678f;
+        mainDsp.process(mainBufL[(size_t) sample], mainBufR[(size_t) sample]);
+        float centerSample = monoSum;
+        float centerPair = monoSum;
+        centerDsp.process(centerSample, centerPair);
         const float lrL = mainBufL[(size_t) sample] * mainGain;
         const float lrR = mainBufR[(size_t) sample] * mainGain;
         for (int matrix = 0; matrix < numMatrices; ++matrix)
@@ -614,9 +638,32 @@ void MixEngine::processChunk(float* left, float* right, int numSamples, juce::in
             }
         }
 
-        const float center = monoSum * mainMonoGain * centerGain;
+        const float center = foldCenter ? centerSample * mainMonoGain * centerGain : 0.0f;
         float programL = lrL + center;
         float programR = lrR + center;
+
+        for (int matrix = 0; matrix < numMatrices; ++matrix)
+        {
+            float matrixL = 0.0f;
+            float matrixR = 0.0f;
+
+            for (int bus = 0; bus < numBuses; ++bus)
+            {
+                const float send = busMatrixSmooth[(size_t) bus][(size_t) matrix];
+                const bool pre = busMatrixPre[(size_t) bus][(size_t) matrix] != 0;
+                matrixL += (pre ? busSumL[(size_t) bus] : busSumL[(size_t) bus] * busSmoothL[(size_t) bus]) * send;
+                matrixR += (pre ? busSumR[(size_t) bus] : busSumR[(size_t) bus] * busSmoothR[(size_t) bus]) * send;
+            }
+
+            matrixL += lrL * mainStereoMatrixSmooth[(size_t) matrix];
+            matrixR += lrR * mainStereoMatrixSmooth[(size_t) matrix];
+            matrixL += centerSample * mainMonoGain * mainMonoMatrixSmooth[(size_t) matrix];
+            matrixR += centerSample * mainMonoGain * mainMonoMatrixSmooth[(size_t) matrix];
+            matrixDsp[(size_t) matrix].process(matrixL, matrixR);
+            matrixL *= matrixSmooth[(size_t) matrix];
+            matrixR *= matrixSmooth[(size_t) matrix];
+            juce::ignoreUnused(matrixL, matrixR);
+        }
 
         if (speakerSource > 0)
         {

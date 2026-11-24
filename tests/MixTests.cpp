@@ -363,6 +363,12 @@ public:
             engine.play();
             engine.snapSmoothers();
             auto block = renderBlock (engine, 32);
+            expectWithinAbsoluteError (block.left[8], 0.0f, 0.02f);
+            expectWithinAbsoluteError (block.right[8], 0.0f, 0.02f);
+
+            expect (model.setInt ("/main/m/mix/st", 1));
+            engine.snapSmoothers();
+            block = renderBlock (engine, 32);
             expectWithinAbsoluteError (block.left[8], 0.7071f, 0.03f);
             expectWithinAbsoluteError (block.right[8], 0.7071f, 0.03f);
 
@@ -416,6 +422,19 @@ public:
             engine.snapSmoothers();
             block = renderBlock (engine, 32);
             expectWithinAbsoluteError (block.left[8], 1.0f, 0.02f, "subgroup send stays at unity");
+
+            const float ratio = std::log (4.0f / 1.1f) / std::log (100.0f / 1.1f);
+            expect (model.setFloat ("/ch/01/mix/01/level", 0.75f));
+            expect (model.setInt ("/ch/01/mix/01/tap", 0));
+            expect (model.setInt ("/bus/01/dyn/on", 1));
+            expect (model.setFloat ("/bus/01/dyn/thr", 0.9f));
+            expect (model.setFloat ("/bus/01/dyn/ratio", ratio));
+            expect (model.setFloat ("/bus/01/dyn/knee", 0.0f));
+            expect (model.setFloat ("/bus/01/dyn/mgain", 0.0f));
+            expect (model.setFloat ("/bus/01/dyn/attack", 0.0f));
+            engine.snapSmoothers();
+            block = renderBlock (engine, 64);
+            expectWithinAbsoluteError (block.left[32], std::pow (10.0f, -4.5f / 20.0f), 0.08f, "bus compressor settles near 4:1");
         }
     }
 };

@@ -101,4 +101,39 @@ private:
     Biquad compKeyFilter;
 };
 
+// Six-band EQ and compressor for a bus, matrix, or main bus.
+class GroupDsp
+{
+public:
+    void prepare(double newSampleRate);
+    void configure(const MixPoint& point) noexcept;
+    void process(float& left, float& right) noexcept;
+
+private:
+    float compressorGain(float key) noexcept;
+
+    double sampleRate = 48000.0;
+    ChannelDsp::Biquad eqL[numEqBands];
+    ChannelDsp::Biquad eqR[numEqBands];
+    bool eqEnabled = true;
+    bool compEnabled = false;
+    int compMode = 0;
+    bool compPre = false;
+    bool compRms = false;
+    bool compLog = false;
+    float compThresholdDb = 0.0f;
+    float compRatio = 1.0f;
+    float compKnee = 0.0f;
+    float compMakeupDb = 0.0f;
+    float compMix = 1.0f;
+    float compAttack = 1.0f;
+    float compRelease = 1.0f;
+    int compHoldSamples = 0;
+    int compHoldLeft = 0;
+    float compEnvelope = 0.0f;
+    float compEnvDb = -80.0f;
+    float compPower = 0.0f;
+    float compLevel = 1.0f;
+};
+
 } // namespace vc

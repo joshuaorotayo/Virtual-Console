@@ -320,9 +320,36 @@ bool setMixOn(MixPoint& mix, const juce::StringArray& tokens, int index, int val
         return true;
     }
 
-    if (tokens[index] == "dyn" && index + 1 < tokens.size() && tokens[index + 1] == "on")
+    if (tokens[index] == "dyn" && index + 1 < tokens.size())
     {
-        mix.comp.on = value != 0 ? 1 : 0;
+        auto& dyn = mix.comp;
+        const auto leaf = tokens[index + 1];
+
+        if (leaf == "on")
+            dyn.on = value != 0 ? 1 : 0;
+        else if (leaf == "mode")
+            dyn.mode = value != 0 ? 1 : 0;
+        else if (leaf == "det")
+            dyn.detect = value != 0 ? 1 : 0;
+        else if (leaf == "env")
+            dyn.envelope = value != 0 ? 1 : 0;
+        else if (leaf == "pos")
+            dyn.position = value != 0 ? 1 : 0;
+        else if (leaf == "auto")
+            dyn.autoTime = value != 0 ? 1 : 0;
+        else if (leaf == "filter" && index + 2 < tokens.size() && tokens[index + 2] == "on")
+            dyn.filterOn = value != 0 ? 1 : 0;
+        else if (leaf == "filter" && index + 2 < tokens.size() && tokens[index + 2] == "type")
+            dyn.filterType = std::clamp(value, 0, 8);
+        else
+            return false;
+
+        return true;
+    }
+
+    if (tokens[index] == "eq" && index + 1 < tokens.size() && tokens[index + 1] == "on" && index + 2 >= tokens.size())
+    {
+        mix.eqMaster.store(value != 0 ? 1 : 0, std::memory_order_relaxed);
         return true;
     }
 
@@ -340,9 +367,36 @@ bool getMixOn(const MixPoint& mix, const juce::StringArray& tokens, int index, i
         return true;
     }
 
-    if (tokens[index] == "dyn" && index + 1 < tokens.size() && tokens[index + 1] == "on")
+    if (tokens[index] == "dyn" && index + 1 < tokens.size())
     {
-        value = mix.comp.on.load(std::memory_order_relaxed);
+        const auto& dyn = mix.comp;
+        const auto leaf = tokens[index + 1];
+
+        if (leaf == "on")
+            value = dyn.on.load(std::memory_order_relaxed);
+        else if (leaf == "mode")
+            value = dyn.mode.load(std::memory_order_relaxed);
+        else if (leaf == "det")
+            value = dyn.detect.load(std::memory_order_relaxed);
+        else if (leaf == "env")
+            value = dyn.envelope.load(std::memory_order_relaxed);
+        else if (leaf == "pos")
+            value = dyn.position.load(std::memory_order_relaxed);
+        else if (leaf == "auto")
+            value = dyn.autoTime.load(std::memory_order_relaxed);
+        else if (leaf == "filter" && index + 2 < tokens.size() && tokens[index + 2] == "on")
+            value = dyn.filterOn.load(std::memory_order_relaxed);
+        else if (leaf == "filter" && index + 2 < tokens.size() && tokens[index + 2] == "type")
+            value = dyn.filterType.load(std::memory_order_relaxed);
+        else
+            return false;
+
+        return true;
+    }
+
+    if (tokens[index] == "eq" && index + 1 < tokens.size() && tokens[index + 1] == "on" && index + 2 >= tokens.size())
+    {
+        value = mix.eqMaster.load(std::memory_order_relaxed);
         return true;
     }
 
@@ -411,6 +465,16 @@ void ConsoleModel::setSpeakerSource(int source) noexcept
 int ConsoleModel::getSpeakerSource() const noexcept
 {
     return speakerSource.load(std::memory_order_relaxed);
+}
+
+void ConsoleModel::setCenterToStereo(bool enabled) noexcept
+{
+    centerToStereo.store(enabled ? 1 : 0, std::memory_order_relaxed);
+}
+
+bool ConsoleModel::centerFeedsStereo() const noexcept
+{
+    return centerToStereo.load(std::memory_order_relaxed) != 0;
 }
 
 std::atomic<float>& ConsoleModel::mainMatrixLevel(bool monoBus, int matrix) noexcept
@@ -1185,6 +1249,12 @@ bool ConsoleModel::assignInt(const juce::String& path, int value)
 
     if (tokens[0] == "main" && tokens.size() >= 3 && (tokens[1] == "st" || tokens[1] == "m"))
     {
+        if (tokens[1] == "m" && tokens.size() >= 4 && tokens[2] == "mix" && tokens[3] == "st")
+        {
+            setCenterToStereo(value != 0);
+            return true;
+        }
+
         auto& mix = tokens[1] == "m" ? mainMono : mainSt;
         return setMixOn(mix, tokens, 2, value);
     }
@@ -1486,6 +1556,12 @@ bool ConsoleModel::getInt(const juce::String& path, int& value) const
 
     if (tokens[0] == "main" && tokens.size() >= 3 && (tokens[1] == "st" || tokens[1] == "m"))
     {
+        if (tokens[1] == "m" && tokens.size() >= 4 && tokens[2] == "mix" && tokens[3] == "st")
+        {
+            value = centerFeedsStereo() ? 1 : 0;
+            return true;
+        }
+
         const auto& mix = tokens[1] == "m" ? mainMono : mainSt;
         return getMixOn(mix, tokens, 2, value);
     }

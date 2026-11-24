@@ -1,5 +1,6 @@
 #include "ui/MainComponent.h"
 
+#include "model/DspLaw.h"
 #include "model/FaderLaw.h"
 
 #include <cmath>
@@ -87,7 +88,8 @@ public:
         scribble.setButtonText ("Bus " + juce::String (index + 1));
         scribble.setColour (juce::TextButton::buttonColourId, juce::Colour (0xff232830));
         scribble.setColour (juce::TextButton::textColourOffId, text());
-        scribble.setInterceptsMouseClicks (false, false);
+        scribble.setTooltip ("Edit this bus");
+        scribble.onClick = [this] { if (onSelect != nullptr) onSelect(); };
         addAndMakeVisible (scribble);
 
         pan.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
@@ -175,6 +177,12 @@ public:
         g.fillRoundedRectangle (bounds, 6.0f);
         g.setColour (juce::Colour (0xff7eb6d6));
         g.fillRoundedRectangle (8.0f, 8.0f, (float) getWidth() - 16.0f, 4.0f, 2.0f);
+
+        if (selected)
+        {
+            g.setColour (juce::Colour (0xff7eb6d6));
+            g.drawRoundedRectangle (bounds, 6.0f, 2.0f);
+        }
     }
 
     void resized() override
@@ -191,6 +199,14 @@ public:
         scale.setBounds (area.removeFromLeft (36));
         fader.setBounds (area.reduced (1, 0));
     }
+
+    void setSelected (bool shouldSelect)
+    {
+        selected = shouldSelect;
+        repaint();
+    }
+
+    std::function<void()> onSelect;
 
 private:
     juce::String leaf (const char* name) const
@@ -216,6 +232,7 @@ private:
 
     ConsoleModel& model;
     int index = 0;
+    bool selected = false;
     juce::TextButton scribble;
     juce::Slider pan;
     ConsoleFader fader;
@@ -237,6 +254,18 @@ public:
             strips[(size_t) i] = std::make_unique<BusStrip> (model, i);
             addAndMakeVisible (*strips[(size_t) i]);
         }
+    }
+
+    void setSelectHandler (std::function<void (int)> handler)
+    {
+        for (int i = 0; i < numBuses; ++i)
+            strips[(size_t) i]->onSelect = [handler, i] { if (handler != nullptr) handler (i); };
+    }
+
+    void setSelected (int bus)
+    {
+        for (int i = 0; i < numBuses; ++i)
+            strips[(size_t) i]->setSelected (i == bus);
     }
 
     void refresh()
@@ -266,7 +295,8 @@ public:
         scribble.setButtonText ("Mtx " + juce::String (index + 1));
         scribble.setColour (juce::TextButton::buttonColourId, juce::Colour (0xff232830));
         scribble.setColour (juce::TextButton::textColourOffId, text());
-        scribble.setInterceptsMouseClicks (false, false);
+        scribble.setTooltip ("Edit this matrix");
+        scribble.onClick = [this] { if (onSelect != nullptr) onSelect(); };
         addAndMakeVisible (scribble);
 
         fader.setSliderStyle (juce::Slider::LinearVertical);
@@ -316,6 +346,12 @@ public:
         g.fillRoundedRectangle (bounds, 6.0f);
         g.setColour (juce::Colour (0xffd27ad4));
         g.fillRoundedRectangle (8.0f, 8.0f, (float) getWidth() - 16.0f, 4.0f, 2.0f);
+
+        if (selected)
+        {
+            g.setColour (juce::Colour (0xffd27ad4));
+            g.drawRoundedRectangle (bounds, 6.0f, 2.0f);
+        }
     }
 
     void resized() override
@@ -329,6 +365,14 @@ public:
         scale.setBounds (area.removeFromLeft (36));
         fader.setBounds (area.reduced (1, 0));
     }
+
+    void setSelected (bool shouldSelect)
+    {
+        selected = shouldSelect;
+        repaint();
+    }
+
+    std::function<void()> onSelect;
 
 private:
     juce::String leaf (const char* name) const
@@ -345,6 +389,7 @@ private:
 
     ConsoleModel& model;
     int index = 0;
+    bool selected = false;
     juce::TextButton scribble;
     ConsoleFader fader;
     FaderScale scale;
@@ -363,6 +408,18 @@ public:
             strips[(size_t) i] = std::make_unique<MatrixStrip> (model, i);
             addAndMakeVisible (*strips[(size_t) i]);
         }
+    }
+
+    void setSelectHandler (std::function<void (int)> handler)
+    {
+        for (int i = 0; i < numMatrices; ++i)
+            strips[(size_t) i]->onSelect = [handler, i] { if (handler != nullptr) handler (i); };
+    }
+
+    void setSelected (int matrix)
+    {
+        for (int i = 0; i < numMatrices; ++i)
+            strips[(size_t) i]->setSelected (i == matrix);
     }
 
     void refresh()
@@ -720,6 +777,199 @@ void TransportButton::paintButton(juce::Graphics& g, bool highlighted, bool down
     g.fillPath(triangle);
 }
 
+class GroupEditor : public juce::Component
+{
+public:
+    explicit GroupEditor (ConsoleModel& modelToUse)
+        : model (modelToUse)
+    {
+        title.setFont (juce::Font (juce::FontOptions (16.0f)));
+        title.setColour (juce::Label::textColourId, text());
+        addAndMakeVisible (title);
+
+        for (auto* button : { &stripTarget, &stereoTarget, &centerTarget })
+        {
+            button->setColour (juce::TextButton::buttonColourId, juce::Colour (0xff232830));
+            button->setColour (juce::TextButton::textColourOffId, text());
+            addAndMakeVisible (*button);
+        }
+
+        stripTarget.onClick = [this] { setRoot (stripRoot); };
+        stereoTarget.setButtonText ("LR");
+        stereoTarget.onClick = [this] { setRoot ("/main/st"); };
+        stereoTarget.setTooltip ("Edit the main stereo bus");
+        centerTarget.setButtonText ("C");
+        centerTarget.onClick = [this] { setRoot ("/main/m"); };
+        centerTarget.setTooltip ("Edit the center bus");
+
+        eqOn.setClickingTogglesState (true);
+        eqOn.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xff3d8f5a));
+        eqOn.setColour (juce::TextButton::textColourOnId, juce::Colour (0xff1c2128));
+        eqOn.onClick = [this] { model.setInt (root + "/eq/on", eqOn.getToggleState() ? 1 : 0); };
+        eqOn.setTooltip ("Bypass the 6-band EQ");
+        addAndMakeVisible (eqOn);
+
+        compOn.setClickingTogglesState (true);
+        compOn.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xffe0b040));
+        compOn.setColour (juce::TextButton::textColourOnId, juce::Colour (0xff1c2128));
+        compOn.onClick = [this] { model.setInt (root + "/dyn/on", compOn.getToggleState() ? 1 : 0); };
+        compOn.setTooltip ("Turn the compressor on");
+        addAndMakeVisible (compOn);
+
+        for (int band = 0; band < numEqBands; ++band)
+        {
+            auto& slider = bandGain[(size_t) band];
+            slider.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
+            slider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 64, 16);
+            slider.setRange (0.0, 1.0, 0.0);
+            slider.setScrollWheelEnabled (false);
+            slider.setDoubleClickReturnValue (true, 0.5);
+            slider.textFromValueFunction = [] (double value) { return juce::String (eqGainDb ((float) value), 1); };
+            slider.valueFromTextFunction = [] (const juce::String& text) { return (double) eqGainUnit (text.getFloatValue()); };
+            slider.setTooltip ("Band " + juce::String (band + 1) + " gain");
+            slider.onValueChange = [this, band] { model.setFloat (root + "/eq/" + juce::String (band + 1) + "/g", (float) bandGain[(size_t) band].getValue()); };
+            addAndMakeVisible (slider);
+        }
+
+        auto setupComp = [this] (juce::Slider& slider, const juce::String& leaf, const juce::String& tip, double reset)
+        {
+            slider.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
+            slider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 72, 16);
+            slider.setRange (0.0, 1.0, 0.0);
+            slider.setScrollWheelEnabled (false);
+            slider.setDoubleClickReturnValue (true, reset);
+            slider.setTooltip (tip);
+            slider.onValueChange = [this, leaf, &slider] { model.setFloat (root + "/dyn/" + leaf, (float) slider.getValue()); };
+            addAndMakeVisible (slider);
+        };
+
+        threshold.textFromValueFunction = [] (double value) { return juce::String (compThresholdDb ((float) value), 1); };
+        ratio.textFromValueFunction = [] (double value) { return juce::String (compRatio ((float) value), 1) + ":1"; };
+        makeup.textFromValueFunction = [] (double value) { return juce::String (compMakeupDb ((float) value), 1); };
+        setupComp (threshold, "thr", "Compressor threshold", 0.75);
+        setupComp (ratio, "ratio", "Compressor ratio", 0.5);
+        setupComp (makeup, "mgain", "Compressor makeup gain", 0.5);
+        showStrip ("/bus/01", "Bus 1");
+    }
+
+    void showStrip (const juce::String& newRoot, const juce::String& newTitle)
+    {
+        stripRoot = newRoot;
+        stripTitle = newTitle;
+        stripTarget.setButtonText (newTitle);
+        setRoot (newRoot);
+    }
+
+    void refresh()
+    {
+        if (root.isEmpty())
+            return;
+
+        title.setText (root == "/main/st" ? "Main LR" : root == "/main/m" ? "Center" : stripTitle, juce::dontSendNotification);
+        const auto active = juce::Colour (0xff3d6f8f);
+        stripTarget.setColour (juce::TextButton::buttonColourId, root == stripRoot ? active : juce::Colour (0xff232830));
+        stereoTarget.setColour (juce::TextButton::buttonColourId, root == "/main/st" ? active : juce::Colour (0xff232830));
+        centerTarget.setColour (juce::TextButton::buttonColourId, root == "/main/m" ? active : juce::Colour (0xff232830));
+
+        if (! eqOn.isMouseButtonDown())
+        {
+            int enabled = 1;
+            model.getInt (root + "/eq/on", enabled);
+            eqOn.setToggleState (enabled != 0, juce::dontSendNotification);
+        }
+
+        if (! compOn.isMouseButtonDown())
+        {
+            int enabled = 0;
+            model.getInt (root + "/dyn/on", enabled);
+            compOn.setToggleState (enabled != 0, juce::dontSendNotification);
+        }
+
+        for (int band = 0; band < numEqBands; ++band)
+        {
+            auto& slider = bandGain[(size_t) band];
+
+            if (slider.isMouseButtonDown())
+                continue;
+
+            float gain = 0.5f;
+            model.getFloat (root + "/eq/" + juce::String (band + 1) + "/g", gain);
+            slider.setValue (gain, juce::dontSendNotification);
+        }
+
+        if (! threshold.isMouseButtonDown())
+        {
+            float value = 0.75f;
+            model.getFloat (root + "/dyn/thr", value);
+            threshold.setValue (value, juce::dontSendNotification);
+        }
+
+        if (! ratio.isMouseButtonDown())
+        {
+            float value = 0.5f;
+            model.getFloat (root + "/dyn/ratio", value);
+            ratio.setValue (value, juce::dontSendNotification);
+        }
+
+        if (! makeup.isMouseButtonDown())
+        {
+            float value = 0.5f;
+            model.getFloat (root + "/dyn/mgain", value);
+            makeup.setValue (value, juce::dontSendNotification);
+        }
+    }
+
+    void paint (juce::Graphics& g) override
+    {
+        g.setColour (panel());
+        g.fillRoundedRectangle (getLocalBounds().toFloat().reduced (4.0f), 8.0f);
+    }
+
+    void resized() override
+    {
+        auto area = getLocalBounds().reduced (16, 10);
+        auto header = area.removeFromTop (32);
+        title.setBounds (header.removeFromLeft (160));
+        centerTarget.setBounds (header.removeFromRight (52).reduced (3, 2));
+        stereoTarget.setBounds (header.removeFromRight (52).reduced (3, 2));
+        stripTarget.setBounds (header.removeFromRight (120).reduced (3, 2));
+
+        auto eqRow = area.removeFromTop (std::min (168, area.getHeight() / 2));
+        eqOn.setBounds (eqRow.removeFromLeft (72).reduced (6, 36));
+        const int bandWidth = std::max (1, eqRow.getWidth() / numEqBands);
+
+        for (int band = 0; band < numEqBands; ++band)
+            bandGain[(size_t) band].setBounds (eqRow.removeFromLeft (band == numEqBands - 1 ? eqRow.getWidth() : bandWidth).reduced (4, 0));
+
+        compOn.setBounds (area.removeFromLeft (72).reduced (6, 36));
+        threshold.setBounds (area.removeFromLeft (130).reduced (6, 8));
+        ratio.setBounds (area.removeFromLeft (130).reduced (6, 8));
+        makeup.setBounds (area.removeFromLeft (130).reduced (6, 8));
+    }
+
+private:
+    void setRoot (const juce::String& newRoot)
+    {
+        root = newRoot;
+        refresh();
+    }
+
+    ConsoleModel& model;
+    juce::String root;
+    juce::String stripRoot;
+    juce::String stripTitle;
+    juce::Label title;
+    juce::TextButton stripTarget;
+    juce::TextButton stereoTarget { "LR" };
+    juce::TextButton centerTarget { "C" };
+    juce::TextButton eqOn { "EQ" };
+    juce::TextButton compOn { "Comp" };
+    std::array<juce::Slider, numEqBands> bandGain;
+    juce::Slider threshold;
+    juce::Slider ratio;
+    juce::Slider makeup;
+};
+
 MainComponent::MainComponent()
     : engine (model)
 {
@@ -765,6 +1015,9 @@ MainComponent::MainComponent()
             matricesButton.setToggleState (false, juce::dontSendNotification);
         }
 
+        if (busesOpen)
+            selectBus (selectedBus);
+
         resized();
     };
     addAndMakeVisible (busesButton);
@@ -782,11 +1035,14 @@ MainComponent::MainComponent()
             busesButton.setToggleState (false, juce::dontSendNotification);
         }
 
+        if (matricesOpen)
+            selectMatrix (selectedMatrix);
+
         resized();
     };
     addAndMakeVisible (matricesButton);
 
-    for (auto* label : { &outputLabel, &listenLabel, &mainLabel })
+    for (auto* label : { &outputLabel, &listenLabel, &mainLabel, &centerLabel })
     {
         label->setColour (juce::Label::textColourId, dim());
         label->setFont (juce::Font (juce::FontOptions (12.0f)));
@@ -902,7 +1158,9 @@ MainComponent::MainComponent()
     strips = std::make_unique<StripBank> (model, engine);
     strips->setSelectHandler ([this] (int channel) { selectChannel (channel); });
     buses = std::make_unique<BusBank> (model);
+    buses->setSelectHandler ([this] (int bus) { selectBus (bus); });
     matrices = std::make_unique<MatrixBank> (model);
+    matrices->setSelectHandler ([this] (int matrix) { selectMatrix (matrix); });
     matrixSends = std::make_unique<MatrixSendPanel> (model);
     addChildComponent (matrixSends.get());
     viewport.setViewedComponent (strips.get(), false);
@@ -912,6 +1170,9 @@ MainComponent::MainComponent()
     channelEditor = std::make_unique<ChannelEditor> (model);
     channelEditor->onChannelChanged = [this] (int channel) { selectChannel (channel); };
     addAndMakeVisible (channelEditor.get());
+
+    groupEditor = std::make_unique<GroupEditor> (model);
+    addChildComponent (groupEditor.get());
 
     mainMeter.readLevel = [this] { return engine.getMainMeter(); };
     addAndMakeVisible (mainMeter);
@@ -944,6 +1205,49 @@ MainComponent::MainComponent()
     mainMute.setToggleState (mainOn == 0, juce::dontSendNotification);
     mainMute.onClick = [this] { model.setInt ("/main/st/mix/on", mainMute.getToggleState() ? 0 : 1); };
     addAndMakeVisible (mainMute);
+
+    centerLabel.setJustificationType (juce::Justification::centred);
+    centerLabel.setFont (juce::Font (juce::FontOptions (14.0f)));
+    centerLabel.setColour (juce::Label::textColourId, text());
+
+    centerFader.setSliderStyle (juce::Slider::LinearVertical);
+    centerFader.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 64, 16);
+    centerFader.setRange (0.0, 1.0, 0.0);
+    centerFader.setScrollWheelEnabled (false);
+    centerFader.setDoubleClickReturnValue (true, 0.75);
+    centerFader.textFromValueFunction = [] (double value) { return decibelText (faderToDb ((float) value)); };
+    centerFader.valueFromTextFunction = [] (const juce::String& text)
+    {
+        if (text.containsIgnoreCase ("inf"))
+            return 0.0;
+
+        return (double) dbToFader (text.getFloatValue());
+    };
+    float centerValue = 0.75f;
+    model.getFloat ("/main/m/mix/fader", centerValue);
+    centerFader.setValue (centerValue, juce::dontSendNotification);
+    centerFader.onValueChange = [this] { model.setFloat ("/main/m/mix/fader", (float) centerFader.getValue()); };
+    centerFader.setTooltip ("Center bus level");
+    addAndMakeVisible (centerFader);
+    addAndMakeVisible (centerScale);
+
+    centerMute.setClickingTogglesState (true);
+    centerMute.setColour (juce::TextButton::buttonOnColourId, muteOn());
+    centerMute.setTooltip ("Mute the center bus");
+    int centerOn = 1;
+    model.getInt ("/main/m/mix/on", centerOn);
+    centerMute.setToggleState (centerOn == 0, juce::dontSendNotification);
+    centerMute.onClick = [this] { model.setInt ("/main/m/mix/on", centerMute.getToggleState() ? 0 : 1); };
+    addAndMakeVisible (centerMute);
+
+    centerStereo.setClickingTogglesState (true);
+    centerStereo.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xff3d8f5a));
+    centerStereo.setTooltip ("Fold the center bus into the main stereo output");
+    int fold = 0;
+    model.getInt ("/main/m/mix/st", fold);
+    centerStereo.setToggleState (fold != 0, juce::dontSendNotification);
+    centerStereo.onClick = [this] { model.setInt ("/main/m/mix/st", centerStereo.getToggleState() ? 1 : 0); };
+    addAndMakeVisible (centerStereo);
 
     status.setColour (juce::Label::textColourId, dim());
     status.setFont (juce::Font (juce::FontOptions (12.0f)));
@@ -1009,7 +1313,8 @@ void MainComponent::resized()
     sourceHeading.setVisible (sourcesOpen);
     emptySources.setVisible (sourcesOpen && model.getNumSources() == 0);
     sourceList.setVisible (sourcesOpen && model.getNumSources() > 0);
-    channelEditor->setVisible (! sourcesOpen && ! matricesOpen);
+    channelEditor->setVisible (! sourcesOpen && ! matricesOpen && ! busesOpen);
+    groupEditor->setVisible (! sourcesOpen && (busesOpen || matricesOpen));
     matrixSends->setVisible (matricesOpen && ! sourcesOpen);
 
     if (sourcesOpen)
@@ -1021,19 +1326,34 @@ void MainComponent::resized()
     }
     else if (matricesOpen)
     {
+        auto editorColumn = topHalf.removeFromLeft (std::min (460, topHalf.getWidth() / 2));
+        groupEditor->setBounds (editorColumn.reduced (8, 6));
         matrixSends->setBounds (topHalf.reduced (8, 6));
+    }
+    else if (busesOpen)
+    {
+        groupEditor->setBounds (topHalf.reduced (8, 6));
     }
     else
     {
         channelEditor->setBounds (topHalf.reduced (8, 6));
     }
 
-    auto mainColumn = area.removeFromRight (150).reduced (6, 6);
-    mainLabel.setBounds (mainColumn.removeFromTop (20));
-    mainMute.setBounds (mainColumn.removeFromBottom (26).reduced (28, 0));
-    mainScale.setBounds (mainColumn.removeFromLeft (40));
-    mainMeter.setBounds (mainColumn.removeFromRight (12).reduced (0, 6));
-    mainFader.setBounds (mainColumn.reduced (2, 0));
+    auto mainColumn = area.removeFromRight (228).reduced (6, 6);
+    auto labels = mainColumn.removeFromTop (20);
+    centerLabel.setBounds (labels.removeFromLeft (labels.getWidth() / 2));
+    mainLabel.setBounds (labels);
+    auto buttons = mainColumn.removeFromBottom (26);
+    auto leftButtons = buttons.removeFromLeft (buttons.getWidth() / 2);
+    centerMute.setBounds (leftButtons.removeFromLeft (leftButtons.getWidth() / 2).reduced (2, 0));
+    centerStereo.setBounds (leftButtons.reduced (2, 0));
+    mainMute.setBounds (buttons.reduced (8, 0));
+    auto leftColumn = mainColumn.removeFromLeft (mainColumn.getWidth() / 2);
+    centerScale.setBounds (leftColumn.removeFromLeft (28));
+    centerFader.setBounds (leftColumn.reduced (1, 0));
+    mainScale.setBounds (mainColumn.removeFromLeft (28));
+    mainMeter.setBounds (mainColumn.removeFromRight (10).reduced (0, 6));
+    mainFader.setBounds (mainColumn.reduced (1, 0));
 
     status.setBounds (area.removeFromBottom (18).reduced (10, 0));
     viewport.setBounds (area.reduced (4, 4));
@@ -1049,6 +1369,28 @@ void MainComponent::resized()
                                         : busesOpen ? buses->widthForBuses()
                                                     : strips->widthForChannels();
     bank->setSize (bankWidth, stripHeight);
+}
+
+void MainComponent::selectBus (int busIndex)
+{
+    selectedBus = juce::jlimit (0, numBuses - 1, busIndex);
+    buses->setSelected (selectedBus);
+    groupEditor->showStrip ("/bus/" + juce::String (selectedBus + 1).paddedLeft ('0', 2),
+                            "Bus " + juce::String (selectedBus + 1));
+
+    const int x = selectedBus * BusBank::stripWidth;
+    const auto view = viewport.getViewArea();
+
+    if (busesOpen && (x < view.getX() || x + BusBank::stripWidth > view.getRight()))
+        viewport.setViewPosition (std::max (0, x - BusBank::stripWidth), 0);
+}
+
+void MainComponent::selectMatrix (int matrixIndex)
+{
+    selectedMatrix = juce::jlimit (0, numMatrices - 1, matrixIndex);
+    matrices->setSelected (selectedMatrix);
+    groupEditor->showStrip ("/mtx/" + juce::String (selectedMatrix + 1).paddedLeft ('0', 2),
+                            "Mtx " + juce::String (selectedMatrix + 1));
 }
 
 void MainComponent::selectChannel (int channelIndex)
@@ -1098,6 +1440,7 @@ void MainComponent::timerCallback()
     matrices->refresh();
     matrixSends->refresh();
     channelEditor->refresh();
+    groupEditor->refresh();
 }
 
 void MainComponent::syncTransport()

@@ -52,6 +52,8 @@ public:
     // 0 plays main LR. 1..16 plays that mix bus on the output device.
     void setSpeakerSource(int source) noexcept;
     int getSpeakerSource() const noexcept;
+    void setCenterToStereo(bool enabled) noexcept;
+    bool centerFeedsStereo() const noexcept;
 
     int addSource(const juce::String& name, const juce::String& filePath);
     void removeSource(int index);
@@ -99,6 +101,7 @@ private:
     std::array<std::atomic<int>, numMuteGroups> muteGroups;
     std::atomic<int> listenMode { (int) ListenMode::automatic };
     std::atomic<int> speakerSource { 0 };
+    std::atomic<int> centerToStereo { 0 };
     int soloMode = 0;
     std::atomic<int> channelLink[16] {};
     std::atomic<int> inputSource[numRoutableInputs];

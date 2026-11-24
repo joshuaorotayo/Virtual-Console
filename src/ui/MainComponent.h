@@ -13,6 +13,7 @@ class StripBank;
 class BusBank;
 class MatrixBank;
 class MatrixSendPanel;
+class GroupEditor;
 
 class TransportButton : public juce::Button
 {
@@ -51,6 +52,8 @@ private:
     void refreshSources();
     void showAudioSetup();
     void selectChannel (int channelIndex);
+    void selectBus (int busIndex);
+    void selectMatrix (int matrixIndex);
     void removeSourceById (int sourceId);
     void syncTransport();
     juce::String statusText();
@@ -92,12 +95,18 @@ private:
     std::unique_ptr<MatrixBank> matrices;
     std::unique_ptr<MatrixSendPanel> matrixSends;
     std::unique_ptr<ChannelEditor> channelEditor;
+    std::unique_ptr<GroupEditor> groupEditor;
     juce::Viewport viewport;
     juce::Label mainLabel { {}, "MAIN" };
     MeterView mainMeter;
     ConsoleFader mainFader;
     FaderScale mainScale { mainFader };
     juce::TextButton mainMute { "M" };
+    juce::Label centerLabel { {}, "C" };
+    ConsoleFader centerFader;
+    FaderScale centerScale { centerFader };
+    juce::TextButton centerMute { "M" };
+    juce::TextButton centerStereo { "ST" };
     juce::Label status;
     std::unique_ptr<juce::FileChooser> chooser;
     std::vector<OutputChoice> outputs;
@@ -106,6 +115,8 @@ private:
     bool busesOpen = false;
     bool matricesOpen = false;
     int selectedChannel = 0;
+    int selectedBus = 0;
+    int selectedMatrix = 0;
     bool scrubbing = false;
     bool movingTimeline = false;
 

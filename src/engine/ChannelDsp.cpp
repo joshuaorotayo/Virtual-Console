@@ -453,4 +453,159 @@ void ChannelDsp::processLinked(ChannelDsp& partner,
     }
 }
 
+void GroupDsp::prepare(double newSampleRate)
+{
+    sampleRate = newSampleRate > 0.0 ? newSampleRate : 48000.0;
+
+    for (auto& band : eqL)
+        band.reset();
+
+    for (auto& band : eqR)
+        band.reset();
+
+    compEnvelope = 0.0f;
+    compEnvDb = -80.0f;
+    compPower = 0.0f;
+    compLevel = 1.0f;
+    compHoldLeft = 0;
+}
+
+void GroupDsp::configure(const MixPoint& point) noexcept
+{
+    eqEnabled = point.eqMaster.load(std::memory_order_relaxed) != 0;
+
+    for (int band = 0; band < numEqBands; ++band)
+    {
+        const auto& params = point.eq[band];
+        const float gain = eqGainDb(loadUnit(params.gain));
+        const int type = params.type.load(std::memory_order_relaxed);
+        const bool enabled = params.on.load(std::memory_order_relaxed) != 0;
+        const bool flat = std::abs(gain) < 0.05f && type != 0 && type != 5;
+
+        if (! enabled || flat)
+        {
+            eqL[band].setUnity();
+            eqR[band].setUnity();
+            continue;
+        }
+
+        const float frequency = std::clamp(eqFrequencyHz(loadUnit(params.freq)), 20.0f, (float) sampleRate * 0.45f);
+        const float q = eqQ(loadUnit(params.q));
+
+        auto design = [&](ChannelDsp::Biquad& filter)
+        {
+            if (type == 0)
+                setHighPass(filter, frequency, sampleRate);
+            else if (type == 1)
+                setShelf(filter, frequency, gain, false, sampleRate);
+            else if (type == 4)
+                setShelf(filter, frequency, gain, true, sampleRate);
+            else if (type == 5)
+                setLowPass(filter, frequency, sampleRate);
+            else
+                setPeak(filter, frequency, q, gain, sampleRate);
+        };
+
+        design(eqL[band]);
+        design(eqR[band]);
+    }
+
+    const auto& comp = point.comp;
+    compEnabled = comp.on.load(std::memory_order_relaxed) != 0;
+    compMode = comp.mode.load(std::memory_order_relaxed) != 0 ? 1 : 0;
+    compPre = comp.position.load(std::memory_order_relaxed) != 0;
+    compRms = comp.detect.load(std::memory_order_relaxed) != 0;
+    compLog = comp.envelope.load(std::memory_order_relaxed) != 0;
+    compThresholdDb = vc::compThresholdDb(loadUnit(comp.threshold));
+    compRatio = vc::compRatio(loadUnit(comp.ratio));
+    compKnee = compKneeDb(loadUnit(comp.knee));
+    compMakeupDb = vc::compMakeupDb(loadUnit(comp.makeup));
+    compMix = clamp01(loadUnit(comp.mix));
+    const bool automatic = comp.autoTime.load(std::memory_order_relaxed) != 0;
+    const float attackMs = automatic ? 10.0f : dynamicsMilliseconds(loadUnit(comp.attack), 0.1f, 120.0f);
+    const float releaseMs = automatic ? 120.0f : dynamicsMilliseconds(loadUnit(comp.release), 5.0f, 4000.0f);
+    compAttack = timeCoefficient(attackMs, sampleRate);
+    compRelease = timeCoefficient(releaseMs, sampleRate);
+    compHoldSamples = (int) std::lround(dynamicsMilliseconds(loadUnit(comp.hold), 0.1f, 2000.0f) * 0.001 * sampleRate);
+}
+
+float GroupDsp::compressorGain(float key) noexcept
+{
+    if (! compEnabled)
+        return 1.0f;
+
+    float magnitude = std::abs(key);
+
+    if (compRms)
+    {
+        compPower += (magnitude * magnitude - compPower) * compAttack;
+        magnitude = std::sqrt(std::max(compPower, 0.0f));
+    }
+
+    if (compLog)
+    {
+        const float decibels = 20.0f * std::log10(magnitude + 1.0e-8f);
+        const float follow = decibels > compEnvDb ? compAttack : compRelease;
+        compEnvDb += (decibels - compEnvDb) * follow;
+        magnitude = std::pow(10.0f, compEnvDb / 20.0f);
+    }
+    else
+    {
+        const float follow = magnitude > compEnvelope ? compAttack : compRelease;
+        compEnvelope += (magnitude - compEnvelope) * follow;
+        magnitude = compEnvelope;
+    }
+
+    const float levelDb = 20.0f * std::log10(magnitude + 1.0e-8f);
+    const float outputDb = compressorOutputDb(levelDb, compMode, compThresholdDb, compRatio, compKnee, compMakeupDb);
+    const float target = dbToGain(outputDb - levelDb);
+
+    if (target < compLevel)
+    {
+        compHoldLeft = compHoldSamples;
+        compLevel += (target - compLevel) * compAttack;
+    }
+    else if (compHoldLeft > 0)
+    {
+        --compHoldLeft;
+    }
+    else
+    {
+        compLevel += (target - compLevel) * compRelease;
+    }
+
+    return (1.0f - compMix) + compLevel * compMix;
+}
+
+void GroupDsp::process(float& left, float& right) noexcept
+{
+    auto shape = [](ChannelDsp::Biquad* bands, bool enabled, float sample)
+    {
+        if (! enabled)
+            return sample;
+
+        for (int band = 0; band < numEqBands; ++band)
+            sample = bands[band].tick(sample);
+
+        return sample;
+    };
+
+    if (compPre)
+    {
+        const float gain = compressorGain(std::max(std::abs(left), std::abs(right)));
+        left *= gain;
+        right *= gain;
+    }
+
+    left = shape(eqL, eqEnabled, left);
+    right = shape(eqR, eqEnabled, right);
+
+    if (! compPre)
+    {
+        const float gain = compressorGain(std::max(std::abs(left), std::abs(right)));
+        left *= gain;
+        right *= gain;
+    }
+}
+
 } // namespace vc
