@@ -114,6 +114,26 @@ public:
             expect (! model.setString ("/config/aes50/A/box", "not-a-box"));
             expect (model.getString ("/config/aes50/A/box", boxName));
             expectEquals (boxName, juce::String ("DL32"));
+            int outputSource = -1;
+            expect (model.getInt ("/outputs/main/01/src", outputSource));
+            expectEquals (outputSource, outputMainL);
+            expect (model.getInt ("/outputs/main/02/src", outputSource));
+            expectEquals (outputSource, outputMainR);
+            expect (model.setInt ("/outputs/main/03/src", outputSourceForBus (0, true)));
+            expect (model.setInt ("/outputs/main/03/tap", 1));
+            expect (model.setFloat ("/outputs/main/03/delay", 12.5f));
+            expect (model.getInt ("/outputs/main/03/src", outputSource));
+            expectEquals (outputSource, outputSourceForBus (0, true));
+            int outputTap = 0;
+            float outputDelay = 0.0f;
+            expect (model.getInt ("/outputs/main/03/tap", outputTap));
+            expect (model.getFloat ("/outputs/main/03/delay", outputDelay));
+            expectEquals (outputTap, 1);
+            expectWithinAbsoluteError (outputDelay, 12.5f, 1.0e-4f);
+            model.setChannelSource (0, aes50AInputBase + 3);
+            expectEquals (model.getChannelSource (0), aes50AInputBase + 3);
+            expectEquals (model.inputName (aes50AInputBase + 3), juce::String ("AES50 A 4"));
+            model.setChannelSource (0, 0);
             expect (model.setFloat ("/ch/01/mix/01/level", 0.4f));
             expect (model.setInt ("/ch/01/mix/01/tap", 1));
             expect (model.setInt ("/bus/01/mix/st", 1));
@@ -593,6 +613,24 @@ public:
         expect (clipboard.getFloat ("/ch/02/mix/fader", pasted));
         expectWithinAbsoluteError (pasted, 0.22f, 1.0e-4f, "paste copies the fader");
         expectEquals (clipboard.getChannelSource (1), 0, "paste leaves the source assignment");
+
+        beginTest ("local outputs patch the speakers");
+        {
+            auto silent = renderConstant (256, 1.0f, [] (ConsoleModel& model)
+            {
+                model.setInt ("/outputs/main/01/src", outputOff);
+                model.setInt ("/outputs/main/02/src", outputOff);
+            });
+            expectLessThan (std::abs (silent.back()), 0.001f, "off outputs are silent");
+
+            auto direct = renderConstant (512, 1.0f, [] (ConsoleModel& model)
+            {
+                model.setInt ("/outputs/main/01/src", outputDirectBase);
+                model.setInt ("/outputs/main/01/tap", 3);
+                model.setFloat ("/ch/01/mix/pan", 0.5f);
+            });
+            expectWithinAbsoluteError (direct.back(), 1.0f, 0.05f, "a post-fader direct out reaches output 1");
+        }
     }
 
 private:

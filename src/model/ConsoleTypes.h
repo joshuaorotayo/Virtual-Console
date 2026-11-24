@@ -25,6 +25,47 @@ constexpr int numLocalInputs = 32;
 constexpr int numLocalOutputs = 16;
 constexpr int numAuxOutputs = 6;
 constexpr int numRoutableInputs = numLocalInputs + numAuxIns;
+constexpr int numAes50Channels = 48;
+constexpr int aes50AInputBase = numRoutableInputs;
+constexpr int aes50BInputBase = aes50AInputBase + numAes50Channels;
+constexpr int numCardChannels = 32;
+constexpr int cardInputBase = aes50BInputBase + numAes50Channels;
+constexpr int numUserInputs = 32;
+constexpr int userInputBase = cardInputBase + numCardChannels;
+constexpr int numPatchInputs = userInputBase + numUserInputs;
+constexpr int numP16Outputs = 16;
+constexpr int numAesEbuOutputs = 2;
+constexpr int numUserOutputPatches = 48;
+constexpr int connectorOut1Block = 20;
+constexpr int connectorOut9Block = 21;
+
+constexpr int outputOff = 0;
+constexpr int outputMainL = 1;
+constexpr int outputMainR = 2;
+constexpr int outputMainC = 3;
+constexpr int outputBusBase = 4;
+constexpr int outputMatrixBase = outputBusBase + numBuses * 2;
+constexpr int outputDirectBase = outputMatrixBase + numMatrices * 2;
+constexpr int outputMonitorL = outputDirectBase + numChannels;
+constexpr int outputMonitorR = outputMonitorL + 1;
+constexpr int outputBusMonoBase = outputMonitorR + 1;
+constexpr int outputMatrixMonoBase = outputBusMonoBase + numBuses;
+constexpr int numOutputSources = outputMatrixMonoBase + numMatrices;
+
+inline bool outputIsDirect (int source) noexcept
+{
+    return source >= outputDirectBase && source < outputDirectBase + numChannels;
+}
+
+inline int outputSourceForBus (int bus, bool right) noexcept
+{
+    return outputBusBase + bus * 2 + (right ? 1 : 0);
+}
+
+inline int outputSourceForMatrix (int matrix, bool right) noexcept
+{
+    return outputMatrixBase + matrix * 2 + (right ? 1 : 0);
+}
 
 enum class ListenMode
 {
@@ -144,6 +185,14 @@ struct Stagebox
     int inputs = 0;
     int outputs = 0;
     int kind = 0;
+};
+
+struct LocalOutput
+{
+    std::atomic<int> source { outputOff };
+    std::atomic<int> tap { 3 | 8 };
+    std::atomic<int> phase { 0 };
+    std::atomic<float> delayMs { 0.0f };
 };
 
 struct RoutingBanks

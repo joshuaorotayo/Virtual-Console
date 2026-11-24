@@ -32,6 +32,39 @@ int indexOf(const juce::String& text, int count)
     return value - 1;
 }
 
+int routedOutputIndex(const juce::StringArray& tokens, int& bank)
+{
+    if (tokens.size() < 4 || tokens[0] != "outputs")
+        return -1;
+
+    int count = 0;
+
+    if (tokens[1] == "main")
+    {
+        bank = 0;
+        count = numLocalOutputs;
+    }
+    else if (tokens[1] == "aux")
+    {
+        bank = 1;
+        count = numAuxOutputs;
+    }
+    else if (tokens[1] == "p16")
+    {
+        bank = 2;
+        count = numP16Outputs;
+    }
+    else if (tokens[1] == "aes")
+    {
+        bank = 3;
+        count = numAesEbuOutputs;
+    }
+    else
+        return -1;
+
+    return indexOf(tokens[2], count);
+}
+
 bool writeMaskBit(std::atomic<int>& mask, int bit, int width, int value)
 {
     if (bit < 0 || bit >= width)
@@ -499,6 +532,37 @@ ConsoleModel::ConsoleModel()
         matrices[(size_t) i].color = i % 8;
     }
 
+    localOutputs[0].source.store(outputMainL, std::memory_order_relaxed);
+    localOutputs[1].source.store(outputMainR, std::memory_order_relaxed);
+    xlrBlocks[0].store(connectorOut1Block, std::memory_order_relaxed);
+    xlrBlocks[1].store(connectorOut9Block, std::memory_order_relaxed);
+    xlrBlocks[2].store(-1, std::memory_order_relaxed);
+    xlrBlocks[3].store(-1, std::memory_order_relaxed);
+
+    for (int i = 0; i < 12; ++i)
+        aes50OutBlock[(size_t) i] = (i % 2) == 0 ? connectorOut1Block : connectorOut9Block;
+
+    for (int i = 0; i < 4; ++i)
+        cardOutBlock[(size_t) i] = 4 + i;
+
+    for (int i = 0; i < 4; ++i)
+        inputBlock[(size_t) i] = i;
+
+    for (int& block : userOutBlock)
+        block = -1;
+
+    for (int i = 0; i < numUserInputs; ++i)
+        userInput[(size_t) i] = i < numLocalInputs ? i : -1;
+
+    for (int i = 0; i < numUserOutputPatches; ++i)
+        userOutput[(size_t) i] = -1;
+
+    for (int i = 0; i < numP16Outputs; ++i)
+    {
+        p16Outputs[(size_t) i].source.store(outputDirectBase + i, std::memory_order_relaxed);
+        p16Outputs[(size_t) i].tap.store(0, std::memory_order_relaxed);
+    }
+
     for (int i = 0; i < numFxReturns; ++i)
     {
         fxReturnNames[i] = "Fx " + juce::String(i + 1);
@@ -644,7 +708,7 @@ void ConsoleModel::setChannelSource(int channelIndex, int inputIndex) noexcept
     if (channelIndex < 0 || channelIndex >= numChannels)
         return;
 
-    if (inputIndex < -1 || inputIndex >= numRoutableInputs)
+    if (inputIndex < -1 || inputIndex >= numPatchInputs)
         inputIndex = -1;
 
     channels[(size_t) channelIndex].source.store(inputIndex, std::memory_order_relaxed);
@@ -713,7 +777,323 @@ juce::String ConsoleModel::inputName(int inputIndex)
     if (inputIndex >= numLocalInputs && inputIndex < numRoutableInputs)
         return "Aux " + juce::String(inputIndex - numLocalInputs + 1);
 
+    if (inputIndex >= aes50AInputBase && inputIndex < aes50BInputBase)
+        return "AES50 A " + juce::String(inputIndex - aes50AInputBase + 1);
+
+    if (inputIndex >= aes50BInputBase && inputIndex < cardInputBase)
+        return "AES50 B " + juce::String(inputIndex - aes50BInputBase + 1);
+
+    if (inputIndex >= cardInputBase && inputIndex < userInputBase)
+        return "Card " + juce::String(inputIndex - cardInputBase + 1);
+
+    if (inputIndex >= userInputBase && inputIndex < numPatchInputs)
+        return "User " + juce::String(inputIndex - userInputBase + 1);
+
     return "None";
+}
+
+juce::String ConsoleModel::outputSourceName(int source)
+{
+    if (source == outputMainL)
+        return "Main L";
+
+    if (source == outputMainR)
+        return "Main R";
+
+    if (source == outputMainC)
+        return "Main C";
+
+    if (source == outputMonitorL)
+        return "Monitor L";
+
+    if (source == outputMonitorR)
+        return "Monitor R";
+
+    if (source >= outputBusBase && source < outputMatrixBase)
+    {
+        const int offset = source - outputBusBase;
+        return "Bus " + juce::String(offset / 2 + 1) + ((offset & 1) != 0 ? " R" : " L");
+    }
+
+    if (source >= outputMatrixBase && source < outputDirectBase)
+    {
+        const int offset = source - outputMatrixBase;
+        return "Mtx " + juce::String(offset / 2 + 1) + ((offset & 1) != 0 ? " R" : " L");
+    }
+
+    if (outputIsDirect(source))
+        return "Ch " + juce::String(source - outputDirectBase + 1);
+
+    if (source >= outputBusMonoBase && source < outputMatrixMonoBase)
+        return "Bus " + juce::String(source - outputBusMonoBase + 1);
+
+    if (source >= outputMatrixMonoBase && source < numOutputSources)
+        return "Mtx " + juce::String(source - outputMatrixMonoBase + 1);
+
+    return "Off";
+}
+
+LocalOutput& ConsoleModel::localOutput(int index) noexcept
+{
+    return localOutputs[(size_t) std::clamp(index, 0, numLocalOutputs - 1)];
+}
+
+const LocalOutput& ConsoleModel::localOutput(int index) const noexcept
+{
+    return localOutputs[(size_t) std::clamp(index, 0, numLocalOutputs - 1)];
+}
+
+LocalOutput& ConsoleModel::auxOutput(int index) noexcept
+{
+    return auxOutputs[(size_t) std::clamp(index, 0, numAuxOutputs - 1)];
+}
+
+const LocalOutput& ConsoleModel::auxOutput(int index) const noexcept
+{
+    return auxOutputs[(size_t) std::clamp(index, 0, numAuxOutputs - 1)];
+}
+
+LocalOutput& ConsoleModel::outputStrip(int bank, int index) noexcept
+{
+    if (bank == 1)
+        return auxOutput(index);
+
+    if (bank == 2)
+        return p16Outputs[(size_t) std::clamp(index, 0, numP16Outputs - 1)];
+
+    if (bank == 3)
+        return aesOutputs[(size_t) std::clamp(index, 0, numAesEbuOutputs - 1)];
+
+    return localOutput(index);
+}
+
+const LocalOutput& ConsoleModel::outputStrip(int bank, int index) const noexcept
+{
+    if (bank == 1)
+        return auxOutput(index);
+
+    if (bank == 2)
+        return p16Outputs[(size_t) std::clamp(index, 0, numP16Outputs - 1)];
+
+    if (bank == 3)
+        return aesOutputs[(size_t) std::clamp(index, 0, numAesEbuOutputs - 1)];
+
+    return localOutput(index);
+}
+
+int ConsoleModel::xlrBlock(int group) const noexcept
+{
+    if (group < 0 || group >= 4)
+        return -1;
+
+    return xlrBlocks[(size_t) group].load(std::memory_order_relaxed);
+}
+
+bool ConsoleModel::setRoutingInt(const juce::StringArray& tokens, int value)
+{
+    if (tokens[2] == "auxremap" && tokens[3] == "mode")
+    {
+        auxRemapMode = value != 0 ? 1 : 0;
+        return true;
+    }
+
+    if (tokens[2] == "auxremap" && (tokens[3] == "a" || tokens[3] == "b"))
+    {
+        int& slot = tokens[3] == "a" ? auxRemapA : auxRemapB;
+        slot = std::clamp(value, 0, 3);
+        return true;
+    }
+
+    if (tokens[2] == "iq" && tokens[3] == "group")
+    {
+        iqGroup = std::clamp(value, 0, 2);
+        return true;
+    }
+
+    if (tokens[2] == "xlr")
+    {
+        const int index = indexOf(tokens[3], 4);
+
+        if (index < 0)
+            return false;
+
+        xlrBlocks[(size_t) index].store(std::clamp(value, -1, 40), std::memory_order_relaxed);
+        return true;
+    }
+
+    if (tokens[2] == "aes50")
+    {
+        const int index = indexOf(tokens[3], 12);
+
+        if (index < 0)
+            return false;
+
+        aes50OutBlock[(size_t) index] = std::clamp(value, -1, 40);
+        return true;
+    }
+
+    if (tokens[2] == "card")
+    {
+        const int index = indexOf(tokens[3], 4);
+
+        if (index < 0)
+            return false;
+
+        cardOutBlock[(size_t) index] = std::clamp(value, -1, 40);
+        return true;
+    }
+
+    if (tokens[2] == "in")
+    {
+        const int index = indexOf(tokens[3], 4);
+
+        if (index < 0)
+            return false;
+
+        inputBlock[(size_t) index] = std::clamp(value, -1, 40);
+        return true;
+    }
+
+    if (tokens[2] == "userbank")
+    {
+        const int index = indexOf(tokens[3], 6);
+
+        if (index < 0)
+            return false;
+
+        userOutBlock[(size_t) index] = std::clamp(value, -1, 40);
+        return true;
+    }
+
+    if (tokens[2] == "userin")
+    {
+        const int index = indexOf(tokens[3], numUserInputs);
+
+        if (index < 0)
+            return false;
+
+        userInput[(size_t) index] = std::clamp(value, -1, numPatchInputs - 1);
+        return true;
+    }
+
+    if (tokens[2] == "userout")
+    {
+        const int index = indexOf(tokens[3], numUserOutputPatches);
+
+        if (index < 0)
+            return false;
+
+        userOutput[(size_t) index] = std::clamp(value, -1, numOutputSources - 1);
+        return true;
+    }
+
+    return false;
+}
+
+bool ConsoleModel::getRoutingInt(const juce::StringArray& tokens, int& value) const
+{
+    if (tokens[2] == "auxremap" && tokens[3] == "mode")
+    {
+        value = auxRemapMode;
+        return true;
+    }
+
+    if (tokens[2] == "auxremap" && tokens[3] == "a")
+    {
+        value = auxRemapA;
+        return true;
+    }
+
+    if (tokens[2] == "auxremap" && tokens[3] == "b")
+    {
+        value = auxRemapB;
+        return true;
+    }
+
+    if (tokens[2] == "iq" && tokens[3] == "group")
+    {
+        value = iqGroup;
+        return true;
+    }
+
+    if (tokens[2] == "xlr")
+    {
+        const int index = indexOf(tokens[3], 4);
+
+        if (index < 0)
+            return false;
+
+        value = xlrBlocks[(size_t) index].load(std::memory_order_relaxed);
+        return true;
+    }
+
+    if (tokens[2] == "aes50")
+    {
+        const int index = indexOf(tokens[3], 12);
+
+        if (index < 0)
+            return false;
+
+        value = aes50OutBlock[(size_t) index];
+        return true;
+    }
+
+    if (tokens[2] == "card")
+    {
+        const int index = indexOf(tokens[3], 4);
+
+        if (index < 0)
+            return false;
+
+        value = cardOutBlock[(size_t) index];
+        return true;
+    }
+
+    if (tokens[2] == "in")
+    {
+        const int index = indexOf(tokens[3], 4);
+
+        if (index < 0)
+            return false;
+
+        value = inputBlock[(size_t) index];
+        return true;
+    }
+
+    if (tokens[2] == "userbank")
+    {
+        const int index = indexOf(tokens[3], 6);
+
+        if (index < 0)
+            return false;
+
+        value = userOutBlock[(size_t) index];
+        return true;
+    }
+
+    if (tokens[2] == "userin")
+    {
+        const int index = indexOf(tokens[3], numUserInputs);
+
+        if (index < 0)
+            return false;
+
+        value = userInput[(size_t) index];
+        return true;
+    }
+
+    if (tokens[2] == "userout")
+    {
+        const int index = indexOf(tokens[3], numUserOutputPatches);
+
+        if (index < 0)
+            return false;
+
+        value = userOutput[(size_t) index];
+        return true;
+    }
+
+    return false;
 }
 
 juce::String ConsoleModel::getChannelName(int index) const
@@ -926,6 +1306,16 @@ bool ConsoleModel::assignFloat(const juce::String& path, float value)
         return true;
     }
 
+    int outputBank = 0;
+    const int outputIndex = routedOutputIndex(tokens, outputBank);
+
+    if (outputIndex >= 0 && tokens[3] == "delay")
+    {
+        auto& strip = outputStrip(outputBank, outputIndex);
+        strip.delayMs.store(std::clamp(value, 0.0f, 500.0f), std::memory_order_relaxed);
+        return true;
+    }
+
     return false;
 }
 
@@ -1094,6 +1484,16 @@ bool ConsoleModel::getFloat(const juce::String& path, float& value) const
             return false;
 
         value = fx[(size_t) slot].par[param];
+        return true;
+    }
+
+    int outputBank = 0;
+    const int outputIndex = routedOutputIndex(tokens, outputBank);
+
+    if (outputIndex >= 0 && tokens[3] == "delay")
+    {
+        const auto& strip = outputStrip(outputBank, outputIndex);
+        value = strip.delayMs.load(std::memory_order_relaxed);
         return true;
     }
 
@@ -1482,6 +1882,35 @@ bool ConsoleModel::assignInt(const juce::String& path, int value)
 
         return setMixOn(strip, tokens, 2, value);
     }
+
+    int outputBank = 0;
+    const int outputIndex = routedOutputIndex(tokens, outputBank);
+
+    if (outputIndex >= 0)
+    {
+        auto& strip = outputStrip(outputBank, outputIndex);
+
+        if (tokens[3] == "src")
+        {
+            strip.source.store(std::clamp(value, 0, numOutputSources - 1), std::memory_order_relaxed);
+            return true;
+        }
+
+        if (tokens[3] == "tap")
+        {
+            strip.tap.store(std::clamp(value, 0, 15), std::memory_order_relaxed);
+            return true;
+        }
+
+        if (tokens[3] == "phase")
+        {
+            strip.phase.store(value != 0 ? 1 : 0, std::memory_order_relaxed);
+            return true;
+        }
+    }
+
+    if (tokens[0] == "config" && tokens.size() >= 4 && tokens[1] == "routing")
+        return setRoutingInt(tokens, value);
 
     return false;
 }
@@ -1874,6 +2303,35 @@ bool ConsoleModel::getInt(const juce::String& path, int& value) const
 
         return getMixOn(strip, tokens, 2, value);
     }
+
+    int outputBank = 0;
+    const int outputIndex = routedOutputIndex(tokens, outputBank);
+
+    if (outputIndex >= 0)
+    {
+        const auto& strip = outputStrip(outputBank, outputIndex);
+
+        if (tokens[3] == "src")
+        {
+            value = strip.source.load(std::memory_order_relaxed);
+            return true;
+        }
+
+        if (tokens[3] == "tap")
+        {
+            value = strip.tap.load(std::memory_order_relaxed);
+            return true;
+        }
+
+        if (tokens[3] == "phase")
+        {
+            value = strip.phase.load(std::memory_order_relaxed);
+            return true;
+        }
+    }
+
+    if (tokens[0] == "config" && tokens.size() >= 4 && tokens[1] == "routing")
+        return getRoutingInt(tokens, value);
 
     return false;
 }

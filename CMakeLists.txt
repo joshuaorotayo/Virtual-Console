@@ -53,6 +53,7 @@ juce_add_gui_app(VirtualConsole
 target_sources(VirtualConsole PRIVATE
     src/Main.cpp
     src/ui/MainComponent.cpp
+    src/ui/RoutingBoard.cpp
     src/ui/ChannelStrip.cpp
     src/ui/ChannelEditor.cpp
     ${VC_CORE_SOURCES}

@@ -1699,7 +1699,7 @@ public:
         sourceBox.setScrollWheelEnabled(false);
         sourceBox.addItem("None", 1);
 
-        for (int input = 0; input < numRoutableInputs; ++input)
+        for (int input = 0; input < numPatchInputs; ++input)
             sourceBox.addItem(ConsoleModel::inputName(input), input + 2);
 
         sourceBox.onChange = [this]
@@ -1846,6 +1846,8 @@ public:
 
         if (patched >= 0 && patched < sourceNames.size())
             readout += "  ·  " + sourceNames[patched];
+        else if (route >= numRoutableInputs)
+            readout += "  ·  stagebox";
         else if (route >= 0)
             readout += "  ·  no source";
 

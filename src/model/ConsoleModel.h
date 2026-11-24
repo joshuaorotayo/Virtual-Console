@@ -76,6 +76,15 @@ public:
     int inputForSource(int sourceIndex) const noexcept;
     int firstFreeInput() const noexcept;
     static juce::String inputName(int inputIndex);
+    static juce::String outputSourceName(int source);
+
+    LocalOutput& localOutput(int index) noexcept;
+    const LocalOutput& localOutput(int index) const noexcept;
+    LocalOutput& auxOutput(int index) noexcept;
+    const LocalOutput& auxOutput(int index) const noexcept;
+    LocalOutput& outputStrip(int bank, int index) noexcept;
+    const LocalOutput& outputStrip(int bank, int index) const noexcept;
+    int xlrBlock(int group) const noexcept;
 
     juce::String getChannelName(int index) const;
     void setChannelName(int index, const juce::String& name);
@@ -184,9 +193,27 @@ private:
     int sourceCount = 0;
     int nextSourceId = 1;
 
+    bool setRoutingInt(const juce::StringArray& tokens, int value);
+    bool getRoutingInt(const juce::StringArray& tokens, int& value) const;
+
     Stagebox aes50A;
     Stagebox aes50B;
     RoutingBanks banks;
+    std::array<LocalOutput, numLocalOutputs> localOutputs;
+    std::array<LocalOutput, numAuxOutputs> auxOutputs;
+    std::array<LocalOutput, numP16Outputs> p16Outputs;
+    std::array<LocalOutput, numAesEbuOutputs> aesOutputs;
+    std::array<std::atomic<int>, 4> xlrBlocks;
+    std::array<int, 12> aes50OutBlock {};
+    std::array<int, 4> cardOutBlock {};
+    std::array<int, 4> inputBlock {};
+    std::array<int, 6> userOutBlock {};
+    std::array<int, numUserInputs> userInput {};
+    std::array<int, numUserOutputPatches> userOutput {};
+    int auxRemapMode = 1;
+    int auxRemapA = 0;
+    int auxRemapB = 0;
+    int iqGroup = 0;
 };
 
 } // namespace vc

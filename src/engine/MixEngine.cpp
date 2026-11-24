@@ -63,6 +63,114 @@ GroupResult groupFor(int dcaMask, int muteMask, const GroupControl& control)
 
     return result;
 }
+
+bool tapIsPreFader(int tap) noexcept
+{
+    const int point = tap & 7;
+    return point == 0 || point == 2 || point == 4;
+}
+
+float routedSample(int source,
+                   int tap,
+                   float mainL,
+                   float mainR,
+                   float mainC,
+                   float preMainL,
+                   float preMainR,
+                   float preMainC,
+                   const std::array<float, numBuses>& busL,
+                   const std::array<float, numBuses>& busR,
+                   const std::array<float, numBuses>& busPreL,
+                   const std::array<float, numBuses>& busPreR,
+                   const std::array<float, numMatrices>& matrixL,
+                   const std::array<float, numMatrices>& matrixR,
+                   const std::array<float, numChannels>& preEq,
+                   const std::array<float, numChannels>& postEq,
+                   const std::array<float, numChannels>& preFader,
+                   const std::array<float, numChannels>& postFader,
+                   float monitorL,
+                   float monitorR) noexcept
+{
+    const bool pre = tapIsPreFader(tap);
+
+    if (source == outputMainL)
+        return pre ? preMainL : mainL;
+
+    if (source == outputMainR)
+        return pre ? preMainR : mainR;
+
+    if (source == outputMainC)
+        return pre ? preMainC : mainC;
+
+    if (source == outputMonitorL)
+        return monitorL;
+
+    if (source == outputMonitorR)
+        return monitorR;
+
+    if (source >= outputBusBase && source < outputMatrixBase)
+    {
+        const int offset = source - outputBusBase;
+        const int bus = offset / 2;
+
+        if (bus < 0 || bus >= numBuses)
+            return 0.0f;
+
+        return (offset & 1) != 0 ? busR[(size_t) bus] : busL[(size_t) bus];
+    }
+
+    if (source >= outputMatrixBase && source < outputDirectBase)
+    {
+        const int offset = source - outputMatrixBase;
+        const int matrix = offset / 2;
+
+        if (matrix < 0 || matrix >= numMatrices)
+            return 0.0f;
+
+        return (offset & 1) != 0 ? matrixR[(size_t) matrix] : matrixL[(size_t) matrix];
+    }
+
+    if (source >= outputBusMonoBase && source < outputMatrixMonoBase)
+    {
+        const int bus = source - outputBusMonoBase;
+
+        if (bus < 0 || bus >= numBuses)
+            return 0.0f;
+
+        const float left = pre ? busPreL[(size_t) bus] : busL[(size_t) bus];
+        const float right = pre ? busPreR[(size_t) bus] : busR[(size_t) bus];
+        return 0.5f * (left + right);
+    }
+
+    if (source >= outputMatrixMonoBase && source < numOutputSources)
+    {
+        const int matrix = source - outputMatrixMonoBase;
+
+        if (matrix < 0 || matrix >= numMatrices)
+            return 0.0f;
+
+        return 0.5f * (matrixL[(size_t) matrix] + matrixR[(size_t) matrix]);
+    }
+
+    if (outputIsDirect(source))
+    {
+        const int channel = source - outputDirectBase;
+        const int point = tap & 7;
+
+        if (point == 0 || point == 4)
+            return preEq[(size_t) channel];
+
+        if (point == 1)
+            return postEq[(size_t) channel];
+
+        if (point == 2)
+            return preFader[(size_t) channel];
+
+        return postFader[(size_t) channel];
+    }
+
+    return 0.0f;
+}
 } // namespace
 
 MixEngine::MixEngine(ConsoleModel& modelToUse)
@@ -105,6 +213,13 @@ void MixEngine::prepareToPlay(int samplesPerBlockExpected, double newSampleRate)
 
     mainDsp.prepare(sampleRate);
     centerDsp.prepare(sampleRate);
+
+    const int delayCapacity = std::max(2, (int) std::lround(sampleRate * 0.5) + 1);
+
+    for (auto& line : outputDelay)
+        line.assign((size_t) delayCapacity, 0.0f);
+
+    outputWrite.fill(0);
 
     for (int i = 0; i < model.getNumSources(); ++i)
         sources[(size_t) i].prepare(sampleRate);
@@ -421,6 +536,35 @@ void MixEngine::snapSmoothers() noexcept
     listenFade = wantSolo ? 1.0f : 0.0f;
 }
 
+float MixEngine::delayOutput(int index, float sample) noexcept
+{
+    if (index < 0 || index >= numLocalOutputs)
+        return sample;
+
+    auto& line = outputDelay[(size_t) index];
+
+    if (line.empty())
+        return sample;
+
+    const int capacity = (int) line.size();
+    const float milliseconds = model.localOutput(index).delayMs.load(std::memory_order_relaxed);
+    const int delay = std::clamp((int) std::lround(milliseconds * (float) sampleRate / 1000.0f), 0, capacity - 1);
+    auto& write = outputWrite[(size_t) index];
+    line[(size_t) write] = sample;
+    int read = write - delay;
+
+    if (read < 0)
+        read += capacity;
+
+    const float delayed = line[(size_t) read];
+    write += 1;
+
+    if (write >= capacity)
+        write = 0;
+
+    return delayed;
+}
+
 void MixEngine::processChunk(float* left, float* right, int numSamples, juce::int64 startSample, bool running) noexcept
 {
     if (scratchCapacity < numSamples || left == nullptr)
@@ -612,11 +756,37 @@ void MixEngine::processChunk(float* left, float* right, int numSamples, juce::in
     const bool foldCenter = model.centerFeedsStereo();
 
     std::array<float, numChannels> peaks {};
+    std::array<int, 2> deviceIndex { -1, -1 };
+    std::array<int, 2> deviceSource {};
+    std::array<int, 2> deviceTap {};
+    std::array<int, 2> devicePhase {};
+    const int xlr = model.xlrBlock(0);
+    const int xlrOrigin = xlr == connectorOut9Block ? 8 : xlr == connectorOut1Block ? 0 : -1;
+
+    for (int output = 0; output < 2; ++output)
+    {
+        const int index = xlrOrigin < 0 ? -1 : xlrOrigin + output;
+        deviceIndex[(size_t) output] = index;
+
+        if (index < 0)
+            continue;
+
+        const auto& strip = model.localOutput(index);
+        deviceSource[(size_t) output] = strip.source.load(std::memory_order_relaxed);
+        deviceTap[(size_t) output] = strip.tap.load(std::memory_order_relaxed);
+        devicePhase[(size_t) output] = strip.phase.load(std::memory_order_relaxed);
+    }
 
     for (int sample = 0; sample < numSamples; ++sample)
     {
         std::array<float, numBuses> busSumL {};
         std::array<float, numBuses> busSumR {};
+        std::array<float, numBuses> busOutL {};
+        std::array<float, numBuses> busOutR {};
+        std::array<float, numChannels> directPreEq {};
+        std::array<float, numChannels> directPostEq {};
+        std::array<float, numChannels> directPreFader {};
+        std::array<float, numChannels> directPostFader {};
         float monoSum = 0.0f;
 
         for (int channel = 0; channel < numChannels; ++channel)
@@ -635,6 +805,11 @@ void MixEngine::processChunk(float* left, float* right, int numSamples, juce::in
                 continue;
 
             const float input = processed[(size_t) channel * (size_t) scratchCapacity + (size_t) sample];
+            const float mute = audible[(size_t) channel] != 0 ? 1.0f : 0.0f;
+            directPreEq[(size_t) channel] = channelDsp[(size_t) channel].preEqSample(sample) * mute;
+            directPostEq[(size_t) channel] = channelDsp[(size_t) channel].postEqSample(sample) * mute;
+            directPreFader[(size_t) channel] = input * mute;
+            directPostFader[(size_t) channel] = input * state.curPost;
             const float leftSample = input * state.curL;
             const float rightSample = input * state.curR;
             monoSum += input * state.curPost * state.curMono;
@@ -670,15 +845,15 @@ void MixEngine::processChunk(float* left, float* right, int numSamples, juce::in
                     continue;
 
                 const float send = subgroup ? 1.0f : gain;
-                const float mute = audible[(size_t) channel] != 0 ? 1.0f : 0.0f;
+                const float sendMute = audible[(size_t) channel] != 0 ? 1.0f : 0.0f;
 
                 if (tap == 1 || tap == 2 || tap == 3)
                 {
                     const float tapped = tap == 2 ? channelDsp[(size_t) channel].preEqSample(sample)
                                        : tap == 3 ? channelDsp[(size_t) channel].postEqSample(sample)
                                                   : input;
-                    busSumL[(size_t) bus] += tapped * state.curPflL * mute * send;
-                    busSumR[(size_t) bus] += tapped * state.curPflR * mute * send;
+                    busSumL[(size_t) bus] += tapped * state.curPflL * sendMute * send;
+                    busSumR[(size_t) bus] += tapped * state.curPflR * sendMute * send;
                 }
                 else
                 {
@@ -695,6 +870,9 @@ void MixEngine::processChunk(float* left, float* right, int numSamples, juce::in
             busSmoothR[(size_t) bus] += (busTargetR[(size_t) bus] - busSmoothR[(size_t) bus]) * smoothCoeff;
             busPostSmooth[(size_t) bus] += (busPostTarget[(size_t) bus] - busPostSmooth[(size_t) bus]) * smoothCoeff;
             busMonoSmooth[(size_t) bus] += (busMonoTarget[(size_t) bus] - busMonoSmooth[(size_t) bus]) * smoothCoeff;
+
+            busOutL[(size_t) bus] = busSumL[(size_t) bus] * busSmoothL[(size_t) bus];
+            busOutR[(size_t) bus] = busSumR[(size_t) bus] * busSmoothR[(size_t) bus];
 
             if (busToMain[(size_t) bus] != 0)
             {
@@ -739,8 +917,11 @@ void MixEngine::processChunk(float* left, float* right, int numSamples, juce::in
         }
 
         const float center = foldCenter ? centerSample * mainMonoGain * centerGain : 0.0f;
-        float programL = lrL + center;
-        float programR = lrR + center;
+        const float programL = lrL + center;
+        const float programR = lrR + center;
+        const float centerOut = centerSample * mainMonoGain;
+        std::array<float, numMatrices> matrixOutL {};
+        std::array<float, numMatrices> matrixOutR {};
 
         for (int matrix = 0; matrix < numMatrices; ++matrix)
         {
@@ -768,21 +949,52 @@ void MixEngine::processChunk(float* left, float* right, int numSamples, juce::in
 
             if (matrixInsertPost[(size_t) matrix] != 0)
                 matrixDsp[(size_t) matrix].process(matrixL, matrixR);
-            juce::ignoreUnused(matrixL, matrixR);
+
+            matrixOutL[(size_t) matrix] = matrixL;
+            matrixOutR[(size_t) matrix] = matrixR;
         }
+
+        const float preMainL = mainBufL[(size_t) sample];
+        const float preMainR = mainBufR[(size_t) sample];
+        float deviceL = deviceIndex[0] < 0 ? 0.0f
+            : routedSample(deviceSource[0], deviceTap[0], programL, programR, centerOut,
+                           preMainL, preMainR, centerSample,
+                           busOutL, busOutR, busSumL, busSumR, matrixOutL, matrixOutR,
+                           directPreEq, directPostEq, directPreFader, directPostFader,
+                           soloBufL[(size_t) sample], soloBufR[(size_t) sample]);
+        float deviceR = deviceIndex[1] < 0 ? 0.0f
+            : routedSample(deviceSource[1], deviceTap[1], programL, programR, centerOut,
+                           preMainL, preMainR, centerSample,
+                           busOutL, busOutR, busSumL, busSumR, matrixOutL, matrixOutR,
+                           directPreEq, directPostEq, directPreFader, directPostFader,
+                           soloBufL[(size_t) sample], soloBufR[(size_t) sample]);
+
+        if (devicePhase[0] != 0)
+            deviceL = -deviceL;
+
+        if (devicePhase[1] != 0)
+            deviceR = -deviceR;
 
         if (speakerSource > 0)
         {
             const int bus = speakerSource - 1;
-            programL = busSumL[(size_t) bus] * busSmoothL[(size_t) bus];
-            programR = busSumR[(size_t) bus] * busSmoothR[(size_t) bus];
+            deviceL = busOutL[(size_t) bus];
+            deviceR = busOutR[(size_t) bus];
+        }
+        else if (deviceIndex[0] >= 0 || deviceIndex[1] >= 0)
+        {
+            if (deviceIndex[0] >= 0)
+                deviceL = delayOutput(deviceIndex[0], deviceL);
+
+            if (deviceIndex[1] >= 0)
+                deviceR = delayOutput(deviceIndex[1], deviceR);
         }
 
         listenFade += (listenTarget - listenFade) * smoothCoeff;
 
         const float fade = listenFade;
-        const float mixedL = programL * (1.0f - fade) + soloBufL[(size_t) sample] * fade;
-        const float mixedR = programR * (1.0f - fade) + soloBufR[(size_t) sample] * fade;
+        const float mixedL = deviceL * (1.0f - fade) + soloBufL[(size_t) sample] * fade;
+        const float mixedR = deviceR * (1.0f - fade) + soloBufR[(size_t) sample] * fade;
         left[sample] = mixedL;
 
         if (right != nullptr)

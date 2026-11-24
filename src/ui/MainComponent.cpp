@@ -1,5 +1,6 @@
 #include "ui/MainComponent.h"
 #include "ui/GroupPad.h"
+#include "ui/RoutingBoard.h"
 #include "ui/StripColour.h"
 
 #include "model/DspLaw.h"
@@ -1784,10 +1785,34 @@ MainComponent::MainComponent()
     sourcesButton.onClick = [this]
     {
         sourcesOpen = sourcesButton.getToggleState();
+
+        if (sourcesOpen)
+        {
+            routingOpen = false;
+            routingButton.setToggleState (false, juce::dontSendNotification);
+        }
+
         resized();
     };
     addAndMakeVisible (sourcesButton);
     sourcesButton.setTooltip ("Show the source list above the faders");
+
+    routingButton.setClickingTogglesState (true);
+    routingButton.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xff3d6f8f));
+    routingButton.onClick = [this]
+    {
+        routingOpen = routingButton.getToggleState();
+
+        if (routingOpen)
+        {
+            sourcesOpen = false;
+            sourcesButton.setToggleState (false, juce::dontSendNotification);
+        }
+
+        resized();
+    };
+    addAndMakeVisible (routingButton);
+    routingButton.setTooltip ("Patch inputs, outputs, and stageboxes");
 
     busesButton.setClickingTogglesState (true);
     busesButton.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xff3d6f8f));
@@ -1896,7 +1921,7 @@ MainComponent::MainComponent()
 
     mixBox.setSelectedId (1, juce::dontSendNotification);
     mixBox.onChange = [this] { model.setSpeakerSource (mixBox.getSelectedId() - 1); };
-    mixBox.setTooltip ("Signal sent to the output device. LR is the main stereo mix.");
+    mixBox.setTooltip ("LR plays local outputs 1 and 2. A bus replaces both speakers.");
     addAndMakeVisible (mixBox);
 
     setupButton.onClick = [this] { showAudioSetup(); };
@@ -1978,6 +2003,11 @@ MainComponent::MainComponent()
     sourceList.setColour (juce::ListBox::outlineColourId, juce::Colour (0xff3c4450));
     sourceList.setOutlineThickness (1);
     addAndMakeVisible (sourceList);
+
+    routingBoard = std::make_unique<RoutingBoard> (model);
+    routingView.setViewedComponent (routingBoard.get(), false);
+    routingView.setScrollBarsShown (true, true);
+    addChildComponent (routingView);
 
     faderBay = std::make_unique<FaderBay> (model, engine);
     faderBay->onChannel = [this] (int channel) { selectChannel (channel); };
@@ -2163,9 +2193,65 @@ void MainComponent::resized()
     restartButton.setBounds (transport.removeFromLeft (36));
     transport.removeFromLeft (8);
     dcasButton.setBounds (transport.removeFromLeft (72));
+    transport.removeFromLeft (6);
+    routingButton.setBounds (transport.removeFromLeft (84));
     transport.removeFromLeft (10);
     timeLabel.setBounds (transport.removeFromRight (118));
     timeline.setBounds (transport.reduced (0, 2));
+
+    routingView.setVisible (routingOpen);
+
+    if (routingOpen)
+    {
+        sourceHeading.setVisible (false);
+        emptySources.setVisible (false);
+        sourceList.setVisible (false);
+        channelEditor->setVisible (false);
+        groupEditor->setVisible (false);
+        matrixEditor->setVisible (false);
+        spareTitle.setVisible (false);
+        viewport.setVisible (false);
+        mainFader.setVisible (false);
+        mainMeter.setVisible (false);
+        mainScale.setVisible (false);
+        centerFader.setVisible (false);
+        centerScale.setVisible (false);
+        mainMute.setVisible (false);
+        centerMute.setVisible (false);
+        centerStereo.setVisible (false);
+        mainLabel.setVisible (false);
+        centerLabel.setVisible (false);
+
+        for (auto& button : bankButton)
+            button.setVisible (false);
+
+        for (auto& button : muteGroupButton)
+            button.setVisible (false);
+
+        status.setBounds (area.removeFromBottom (18).reduced (10, 0));
+        routingView.setBounds (area.reduced (8, 4));
+        routingBoard->setSize (std::max (640, routingView.getMaximumVisibleWidth()),
+                               std::max (240, routingView.getMaximumVisibleHeight()));
+        return;
+    }
+
+    viewport.setVisible (true);
+    mainFader.setVisible (true);
+    mainMeter.setVisible (true);
+    mainScale.setVisible (true);
+    centerFader.setVisible (true);
+    centerScale.setVisible (true);
+    mainMute.setVisible (true);
+    centerMute.setVisible (true);
+    centerStereo.setVisible (true);
+    mainLabel.setVisible (true);
+    centerLabel.setVisible (true);
+
+    for (auto& button : bankButton)
+        button.setVisible (true);
+
+    for (auto& button : muteGroupButton)
+        button.setVisible (true);
 
     auto topHalf = area.removeFromTop (area.getHeight() / 2);
     sourceHeading.setVisible (sourcesOpen);
@@ -2303,12 +2389,11 @@ void MainComponent::showBank (int bank)
 
 void MainComponent::selectSpare (int kind, int index)
 {
-    const bool changed = topEditor != 3 || sourcesOpen;
+    const bool changed = topEditor != 3 || sourcesOpen || routingOpen;
     topEditor = 3;
     spareKind = kind;
     spareIndex = index;
-    sourcesOpen = false;
-    sourcesButton.setToggleState (false, juce::dontSendNotification);
+    closeTopPages();
     faderBay->setSelectedSpare (kind, index);
 
     juce::String name;
@@ -2330,10 +2415,9 @@ void MainComponent::selectSpare (int kind, int index)
 
 void MainComponent::selectBus (int busIndex)
 {
-    const bool changed = topEditor != 1 || sourcesOpen;
+    const bool changed = topEditor != 1 || sourcesOpen || routingOpen;
     topEditor = 1;
-    sourcesOpen = false;
-    sourcesButton.setToggleState (false, juce::dontSendNotification);
+    closeTopPages();
     selectedBus = juce::jlimit (0, numBuses - 1, busIndex);
     faderBay->setSelectedBus (selectedBus);
     groupEditor->showStrip ("/bus/" + juce::String (selectedBus + 1).paddedLeft ('0', 2),
@@ -2350,10 +2434,9 @@ void MainComponent::selectBus (int busIndex)
 
 void MainComponent::selectMatrix (int matrixIndex)
 {
-    const bool changed = topEditor != 2 || sourcesOpen;
+    const bool changed = topEditor != 2 || sourcesOpen || routingOpen;
     topEditor = 2;
-    sourcesOpen = false;
-    sourcesButton.setToggleState (false, juce::dontSendNotification);
+    closeTopPages();
     selectedMatrix = juce::jlimit (0, numMatrices - 1, matrixIndex);
     faderBay->setSelectedMatrix (selectedMatrix);
     matrixEditor->setMatrix (selectedMatrix);
@@ -2369,11 +2452,10 @@ void MainComponent::selectMatrix (int matrixIndex)
 
 void MainComponent::selectChannel (int channelIndex)
 {
-    const bool changed = topEditor != 0 || sourcesOpen;
+    const bool changed = topEditor != 0 || sourcesOpen || routingOpen;
     topEditor = 0;
     selectedChannel = juce::jlimit (0, numChannels - 1, channelIndex);
-    sourcesOpen = false;
-    sourcesButton.setToggleState (false, juce::dontSendNotification);
+    closeTopPages();
 
     if (faderBank == (int) FaderBay::Bank::ch1 && selectedChannel >= 16)
     {
@@ -2435,6 +2517,17 @@ void MainComponent::timerCallback()
     channelEditor->refresh();
     groupEditor->refresh();
     matrixEditor->refresh();
+
+    if (routingOpen && routingBoard != nullptr)
+        routingBoard->refresh();
+}
+
+void MainComponent::closeTopPages()
+{
+    sourcesOpen = false;
+    routingOpen = false;
+    sourcesButton.setToggleState (false, juce::dontSendNotification);
+    routingButton.setToggleState (false, juce::dontSendNotification);
 }
 
 void MainComponent::syncTransport()

@@ -61,6 +61,7 @@ private:
     juce::int64 durationSamples() const noexcept;
     void processChunk(float* left, float* right, int numSamples, juce::int64 startSample, bool running) noexcept;
     void channelTargets(int index, float& pflL, float& pflR, float& outL, float& outR) const noexcept;
+    float delayOutput(int index, float sample) noexcept;
 
     ConsoleModel& model;
     juce::SpinLock sourceLock;
@@ -99,6 +100,8 @@ private:
     std::vector<float> mainBufR;
     std::vector<float> soloBufL;
     std::vector<float> soloBufR;
+    std::array<std::vector<float>, numLocalOutputs> outputDelay;
+    std::array<int, numLocalOutputs> outputWrite {};
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MixEngine)
 };
