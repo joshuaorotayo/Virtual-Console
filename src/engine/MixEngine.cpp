@@ -27,6 +27,12 @@ struct GroupResult
     bool solo = false;
 };
 
+struct InsertRoute
+{
+    int slot = -1;
+    int post = 0;
+};
+
 GroupControl readGroupControl(const ConsoleModel& model)
 {
     GroupControl control;
@@ -224,10 +230,13 @@ void MixEngine::prepareToPlay(int samplesPerBlockExpected, double newSampleRate)
 
     for (int i = 0; i < model.getNumSources(); ++i)
         sources[(size_t) i].prepare(sampleRate);
+
+    mixRecorder.prepare(sampleRate);
 }
 
 void MixEngine::releaseResources()
 {
+    mixRecorder.stop();
 }
 
 void MixEngine::openSource(int index, const juce::File& file)
@@ -635,8 +644,42 @@ void MixEngine::processChunk(float* left, float* right, int numSamples, juce::in
 
     std::fill_n(processed.begin(), (size_t) numChannels * (size_t) scratchCapacity, 0.0f);
 
+    std::array<char, numFxSlots> insertClaimed {};
+    auto claimInsert = [&](const MixPoint& strip) -> InsertRoute
+    {
+        const int chosen = strip.fxInsert.load(std::memory_order_relaxed);
+
+        if (chosen < 0 || chosen >= numFxSlots || insertClaimed[(size_t) chosen] != 0)
+            return {};
+
+        const auto& fx = model.fxSlot(chosen);
+
+        if (fx.on.load(std::memory_order_relaxed) == 0 || ! fxIsGraphicEq(fx.type.load(std::memory_order_relaxed)))
+            return {};
+
+        insertClaimed[(size_t) chosen] = 1;
+        fxRack.prepareInsert(chosen, fx);
+        return { chosen, strip.fxInsertPost.load(std::memory_order_relaxed) != 0 ? 1 : 0 };
+    };
+
+    std::array<InsertRoute, numChannels> channelInsert {};
+
     for (int channel = 0; channel < numChannels; ++channel)
     {
+        if (channel + 1 < numChannels && model.isChannelLinked(channel) && (channel % 2) == 0)
+        {
+            channelInsert[(size_t) channel] = claimInsert(model.channel(channel));
+            ++channel;
+            continue;
+        }
+
+        channelInsert[(size_t) channel] = claimInsert(model.channel(channel));
+    }
+
+    for (int channel = 0; channel < numChannels; ++channel)
+    {
+        const auto& insert = channelInsert[(size_t) channel];
+
         if (channel + 1 < numChannels && model.isChannelLinked(channel) && (channel % 2) == 0)
         {
             const int partner = channel + 1;
@@ -650,7 +693,10 @@ void MixEngine::processChunk(float* left, float* right, int numSamples, juce::in
                                                        processed.data() + (size_t) channel * (size_t) scratchCapacity,
                                                        processed.data() + (size_t) partner * (size_t) scratchCapacity,
                                                        numSamples,
-                                                       model.channel(channel));
+                                                       model.channel(channel),
+                                                       &fxRack,
+                                                       insert.slot,
+                                                       insert.post != 0);
             ++channel;
             continue;
         }
@@ -663,7 +709,10 @@ void MixEngine::processChunk(float* left, float* right, int numSamples, juce::in
         channelDsp[(size_t) channel].process(scratch.data() + (size_t) source * (size_t) scratchCapacity,
                                              processed.data() + (size_t) channel * (size_t) scratchCapacity,
                                              numSamples,
-                                             model.channel(channel));
+                                             model.channel(channel),
+                                             &fxRack,
+                                             insert.slot,
+                                             insert.post != 0);
     }
 
     std::fill_n(mainBufL.begin(), numSamples, 0.0f);
@@ -809,6 +858,18 @@ void MixEngine::processChunk(float* left, float* right, int numSamples, juce::in
     mainDsp.configure(model.mainStereo());
     centerDsp.configure(model.mainCenter());
     const bool foldCenter = model.centerFeedsStereo();
+    std::array<InsertRoute, numBuses> busInsert {};
+
+    for (int bus = 0; bus < numBuses; ++bus)
+        busInsert[(size_t) bus] = claimInsert(model.bus(bus));
+
+    std::array<InsertRoute, numMatrices> matrixFx {};
+
+    for (int matrix = 0; matrix < numMatrices; ++matrix)
+        matrixFx[(size_t) matrix] = claimInsert(model.matrix(matrix));
+
+    const InsertRoute mainInsert = claimInsert(model.mainStereo());
+    const InsertRoute centerInsert = claimInsert(model.mainCenter());
 
     std::array<float, numChannels> peaks {};
     std::array<int, 2> deviceIndex { -1, -1 };
@@ -920,7 +981,13 @@ void MixEngine::processChunk(float* left, float* right, int numSamples, juce::in
 
         auto finishBus = [&](int bus)
         {
+            if (busInsert[(size_t) bus].slot >= 0 && busInsert[(size_t) bus].post == 0)
+                fxRack.processInsert(busInsert[(size_t) bus].slot, busSumL[(size_t) bus], busSumR[(size_t) bus]);
+
             busDsp[(size_t) bus].process(busSumL[(size_t) bus], busSumR[(size_t) bus]);
+
+            if (busInsert[(size_t) bus].slot >= 0 && busInsert[(size_t) bus].post != 0)
+                fxRack.processInsert(busInsert[(size_t) bus].slot, busSumL[(size_t) bus], busSumR[(size_t) bus]);
             busSmoothL[(size_t) bus] += (busTargetL[(size_t) bus] - busSmoothL[(size_t) bus]) * smoothCoeff;
             busSmoothR[(size_t) bus] += (busTargetR[(size_t) bus] - busSmoothR[(size_t) bus]) * smoothCoeff;
             busPostSmooth[(size_t) bus] += (busPostTarget[(size_t) bus] - busPostSmooth[(size_t) bus]) * smoothCoeff;
@@ -997,10 +1064,25 @@ void MixEngine::processChunk(float* left, float* right, int numSamples, juce::in
         mainMonoGain += (mainMonoTarget - mainMonoGain) * smoothCoeff;
 
         constexpr float centerGain = 0.70710678f;
+
+        if (mainInsert.slot >= 0 && mainInsert.post == 0)
+            fxRack.processInsert(mainInsert.slot, mainBufL[(size_t) sample], mainBufR[(size_t) sample]);
+
         mainDsp.process(mainBufL[(size_t) sample], mainBufR[(size_t) sample]);
+
+        if (mainInsert.slot >= 0 && mainInsert.post != 0)
+            fxRack.processInsert(mainInsert.slot, mainBufL[(size_t) sample], mainBufR[(size_t) sample]);
+
         float centerSample = monoSum;
         float centerPair = monoSum;
+
+        if (centerInsert.slot >= 0 && centerInsert.post == 0)
+            fxRack.processInsert(centerInsert.slot, centerSample, centerPair);
+
         centerDsp.process(centerSample, centerPair);
+
+        if (centerInsert.slot >= 0 && centerInsert.post != 0)
+            fxRack.processInsert(centerInsert.slot, centerSample, centerPair);
         const float lrL = mainBufL[(size_t) sample] * mainGain;
         const float lrR = mainBufR[(size_t) sample] * mainGain;
         for (int matrix = 0; matrix < numMatrices; ++matrix)
@@ -1043,17 +1125,37 @@ void MixEngine::processChunk(float* left, float* right, int numSamples, juce::in
             matrixR += centerSample * mainMonoGain * mainMonoMatrixSmooth[(size_t) matrix];
 
             if (matrixInsertPost[(size_t) matrix] == 0)
+            {
+                if (matrixFx[(size_t) matrix].slot >= 0 && matrixFx[(size_t) matrix].post == 0)
+                    fxRack.processInsert(matrixFx[(size_t) matrix].slot, matrixL, matrixR);
+
                 matrixDsp[(size_t) matrix].process(matrixL, matrixR);
+
+                if (matrixFx[(size_t) matrix].slot >= 0 && matrixFx[(size_t) matrix].post != 0)
+                    fxRack.processInsert(matrixFx[(size_t) matrix].slot, matrixL, matrixR);
+            }
 
             matrixL *= matrixSmooth[(size_t) matrix];
             matrixR *= matrixSmooth[(size_t) matrix];
 
             if (matrixInsertPost[(size_t) matrix] != 0)
+            {
+                if (matrixFx[(size_t) matrix].slot >= 0 && matrixFx[(size_t) matrix].post == 0)
+                    fxRack.processInsert(matrixFx[(size_t) matrix].slot, matrixL, matrixR);
+
                 matrixDsp[(size_t) matrix].process(matrixL, matrixR);
+
+                if (matrixFx[(size_t) matrix].slot >= 0 && matrixFx[(size_t) matrix].post != 0)
+                    fxRack.processInsert(matrixFx[(size_t) matrix].slot, matrixL, matrixR);
+            }
 
             matrixOutL[(size_t) matrix] = matrixL;
             matrixOutR[(size_t) matrix] = matrixR;
         }
+
+        mixRecorder.push(programL, programR, centerOut,
+                         busOutL.data(), busOutR.data(),
+                         matrixOutL.data(), matrixOutR.data());
 
         const float preMainL = mainBufL[(size_t) sample];
         const float preMainR = mainBufR[(size_t) sample];
@@ -1103,6 +1205,8 @@ void MixEngine::processChunk(float* left, float* right, int numSamples, juce::in
         else
             left[sample] = 0.5f * (mixedL + mixedR);
     }
+
+    mixRecorder.endBlock();
 
     float outputPeak = 0.0f;
 

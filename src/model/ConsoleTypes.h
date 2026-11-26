@@ -111,6 +111,8 @@ struct MixPoint
     std::atomic<float> pan { 0.5f };
     std::atomic<int> on { 1 };
     std::atomic<int> eqMaster { 1 };
+    std::atomic<int> fxInsert { -1 };
+    std::atomic<int> fxInsertPost { 0 };
     EqBand eq[numEqBands] {};
     Dynamics comp {};
 };

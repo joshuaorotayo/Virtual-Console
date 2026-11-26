@@ -1,6 +1,7 @@
 #include "ui/ChannelEditor.h"
 #include "ui/ChannelIcons.h"
 #include "ui/GroupPad.h"
+#include "ui/InsertEditor.h"
 
 #include "dsp/FilterDesign.h"
 #include "model/DspLaw.h"
@@ -1572,7 +1573,8 @@ public:
         channel,
         eq,
         dyn,
-        sends
+        sends,
+        insert
     };
 
     Surface(ChannelEditor& ownerToUse, ConsoleModel& modelToUse)
@@ -1679,9 +1681,14 @@ public:
         eqTab.onClick = [this] { show(Page::eq); };
         dynTab.onClick = [this] { show(Page::dyn); };
         sendsTab.onClick = [this] { show(Page::sends); };
+        insertTab.onClick = [this] { show(Page::insert); };
 
-        for (auto* tab : { &homeTab, &eqTab, &dynTab, &sendsTab })
+        for (auto* tab : { &homeTab, &eqTab, &dynTab, &sendsTab, &insertTab })
             addAndMakeVisible(*tab);
+
+        insertEditor = std::make_unique<InsertEditor>(model);
+        insertEditor->setRoot("/ch/01");
+        addAndMakeVisible(*insertEditor);
 
         trim = addSlider("Trim", "preamp/trim", [](float value) { return decibelText(trimToDb(value)); });
         polarity = addFlag("Polarity", "preamp/invert");
@@ -1808,6 +1815,10 @@ public:
         eqGraph.setChannel(index);
         gateGraph.setChannel(index);
         compGraph.setChannel(index);
+
+        if (insertEditor != nullptr)
+            insertEditor->setRoot("/ch/" + juce::String(index + 1).paddedLeft('0', 2));
+
         refresh();
     }
 
@@ -1887,6 +1898,10 @@ public:
         eqGraph.setChannel(index);
         gateGraph.setChannel(index);
         compGraph.setChannel(index);
+
+        if (insertEditor != nullptr && page == Page::insert)
+            insertEditor->refresh();
+
         repaint();
     }
 
@@ -1921,9 +1936,9 @@ public:
         linkButton.setBounds(head.removeFromRight(72));
 
         auto tabs = area.removeFromTop(36).reduced(8, 4);
-        for (auto* tab : { &homeTab, &eqTab, &dynTab, &sendsTab })
+        for (auto* tab : { &homeTab, &eqTab, &dynTab, &sendsTab, &insertTab })
         {
-            tab->setBounds(tabs.removeFromLeft(92));
+            tab->setBounds(tabs.removeFromLeft(84));
             tabs.removeFromLeft(6);
         }
 
@@ -2078,6 +2093,8 @@ public:
             if (sendsBoard != nullptr)
                 sendsBoard->setBounds(body);
         }
+        else if (page == Page::insert && insertEditor != nullptr)
+            insertEditor->setBounds(body);
     }
 
 private:
@@ -2098,6 +2115,7 @@ private:
         const bool equaliser = page == Page::eq;
         const bool dyn = page == Page::dyn;
         const bool sends = page == Page::sends;
+        const bool insert = page == Page::insert;
 
         trim->setVisible(channel);
         polarity->setVisible(channel);
@@ -2172,6 +2190,14 @@ private:
         if (busSends != nullptr)
             busSends->setVisible(channel);
 
+        if (insertEditor != nullptr)
+        {
+            insertEditor->setVisible(insert);
+
+            if (insert)
+                insertEditor->refresh();
+        }
+
         styleTabs();
         resized();
     }
@@ -2188,6 +2214,9 @@ private:
         style(eqTab, page == Page::eq, eqOn != nullptr && eqOn->isOn());
         style(dynTab, page == Page::dyn, (compOn != nullptr && compOn->isOn()) || (gateOn != nullptr && gateOn->isOn()));
         style(sendsTab, page == Page::sends, false);
+        int inserted = -1;
+        model.getInt(channelPath(index, "fxinsert/slot"), inserted);
+        style(insertTab, page == Page::insert, inserted >= 0);
     }
 
     struct EqBand
@@ -2221,6 +2250,8 @@ private:
     juce::TextButton eqTab { "EQ" };
     juce::TextButton dynTab { "Dyn" };
     juce::TextButton sendsTab { "Sends" };
+    juce::TextButton insertTab { "Insert" };
+    std::unique_ptr<InsertEditor> insertEditor;
 
     UnitSlider* trim = nullptr;
     FlagButton* polarity = nullptr;
@@ -2315,7 +2346,7 @@ void ChannelEditor::resized()
 class MatrixEditor::Surface : public juce::Component
 {
 public:
-    enum class Page { home, eq, dyn };
+    enum class Page { home, eq, dyn, insert };
 
     explicit Surface(ConsoleModel& modelToUse)
         : model(modelToUse),
@@ -2323,7 +2354,7 @@ public:
           gateGraph(modelToUse, DynamicsGraph::Kind::gate),
           compGraph(modelToUse, DynamicsGraph::Kind::compressor)
     {
-        for (auto* tab : { &homeTab, &eqTab, &dynTab })
+        for (auto* tab : { &homeTab, &eqTab, &dynTab, &insertTab })
         {
             tab->setClickingTogglesState(false);
             tab->setColour(juce::TextButton::buttonColourId, juce::Colour(0xff232830));
@@ -2334,6 +2365,9 @@ public:
         homeTab.onClick = [this] { show(Page::home); };
         eqTab.onClick = [this] { show(Page::eq); };
         dynTab.onClick = [this] { show(Page::dyn); };
+        insertTab.onClick = [this] { show(Page::insert); };
+        insertEditor = std::make_unique<InsertEditor>(model);
+        addAndMakeVisible(*insertEditor);
 
         title.setFont(juce::Font(juce::FontOptions(16.0f)));
         title.setColour(juce::Label::textColourId, text());
@@ -2416,6 +2450,10 @@ public:
         gateGraph.setPathRoot(root);
         compGraph.setPathRoot(root);
         groupPad->setRoot(root);
+
+        if (insertEditor != nullptr)
+            insertEditor->setRoot(root);
+
         refresh();
     }
 
@@ -2458,6 +2496,10 @@ public:
                 knob->refresh();
 
         groupPad->refresh();
+
+        if (page == Page::insert && insertEditor != nullptr)
+            insertEditor->refresh();
+
         eqGraph.repaint();
         gateGraph.repaint();
         compGraph.repaint();
@@ -2481,17 +2523,19 @@ public:
         auto tabs = area.removeFromTop(28);
         const int tabWidth = 88;
 
-        for (auto* tab : { &homeTab, &eqTab, &dynTab })
+        for (auto* tab : { &homeTab, &eqTab, &dynTab, &insertTab })
             tab->setBounds(tabs.removeFromLeft(tabWidth).reduced(2, 0));
 
         area.removeFromTop(6);
         const bool home = page == Page::home;
         const bool equaliser = page == Page::eq;
         const bool dynamics = page == Page::dyn;
+        const bool insertPage = page == Page::insert;
 
         title.setVisible(home);
         insert.setVisible(home);
         groupPad->setVisible(home);
+        insertEditor->setVisible(insertPage);
         eqOn.setVisible(home || equaliser);
         eqGraph.setVisible(home || equaliser);
         gateOn.setVisible(dynamics);
@@ -2507,7 +2551,9 @@ public:
             if (knob != nullptr)
                 knob->setVisible(dynamics);
 
-        if (home)
+        if (insertPage)
+            insertEditor->setBounds(area.reduced(4, 0));
+        else if (home)
         {
             auto header = area.removeFromTop(32);
             title.setBounds(header.removeFromLeft(160));
@@ -2550,9 +2596,10 @@ public:
             compRelease->setBounds(compKnobs);
         }
 
-        for (auto* tab : { &homeTab, &eqTab, &dynTab })
+        for (auto* tab : { &homeTab, &eqTab, &dynTab, &insertTab })
         {
-            const bool on = (tab == &homeTab && home) || (tab == &eqTab && equaliser) || (tab == &dynTab && dynamics);
+            const bool on = (tab == &homeTab && home) || (tab == &eqTab && equaliser) || (tab == &dynTab && dynamics)
+                         || (tab == &insertTab && insertPage);
             tab->setColour(juce::TextButton::buttonColourId, on ? juce::Colour(0xff3d6f8f) : juce::Colour(0xff232830));
         }
     }
@@ -2576,6 +2623,8 @@ private:
     juce::TextButton homeTab { "Home" };
     juce::TextButton eqTab { "EQ" };
     juce::TextButton dynTab { "Dyn" };
+    juce::TextButton insertTab { "Insert" };
+    std::unique_ptr<InsertEditor> insertEditor;
     juce::Label title;
     juce::TextButton insert { "Pre Fader" };
     std::unique_ptr<GroupPad> groupPad;

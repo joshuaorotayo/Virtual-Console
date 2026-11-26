@@ -19,16 +19,18 @@ class RoutingBoard;
 class TransportButton : public juce::Button
 {
 public:
-    enum class Icon { play, restart };
+    enum class Icon { play, restart, record };
 
     explicit TransportButton(Icon iconToDraw);
 
     void setPlaying(bool shouldPlay);
+    void setRecording(bool shouldRecord);
     void paintButton(juce::Graphics& g, bool highlighted, bool down) override;
 
 private:
     Icon icon;
     bool playing = false;
+    bool recording = false;
 };
 
 class MainComponent : public juce::Component,
@@ -58,11 +60,17 @@ private:
     void selectSpare (int kind, int index);
     void showInputPage (int page);
     void showOutputPage (int page);
+    void syncEffectBuses();
+    bool effectsPage() const;
     void applySendMode();
     void closeTopPages();
     int inputPageCount() const;
     void removeSourceById (int sourceId);
     void syncTransport();
+    void showRecordChoices();
+    void beginRecording();
+    void refreshRecordNames();
+    juce::String recordingSummary() const;
     juce::String statusText();
 
     struct OutputChoice
@@ -92,6 +100,11 @@ private:
     TransportButton restartButton { TransportButton::Icon::restart };
     juce::Slider timeline;
     juce::Label timeLabel { {}, "0:00 / 0:00" };
+    juce::Label playbackHeading { {}, "Playback" };
+    TransportButton recordButton { TransportButton::Icon::record };
+    juce::TextButton recordChoose { "Choose" };
+    juce::Label recordSummary { {}, "Main" };
+    juce::Label recordTime { {}, "0:00" };
     juce::Label sourceHeading { {}, "Sources" };
     juce::Label emptySources { {}, "No sources yet. Add a file and it lands on the first free local input or aux. Choose that input from Config." };
     std::unique_ptr<SourceList> sourceModel;

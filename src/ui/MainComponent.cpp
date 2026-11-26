@@ -1,5 +1,6 @@
 #include "ui/MainComponent.h"
 #include "ui/GroupPad.h"
+#include "ui/InsertEditor.h"
 #include "ui/RoutingBoard.h"
 #include "ui/StripColour.h"
 
@@ -867,10 +868,21 @@ void TransportButton::setPlaying(bool shouldPlay)
     repaint();
 }
 
+void TransportButton::setRecording(bool shouldRecord)
+{
+    if (recording == shouldRecord)
+        return;
+
+    recording = shouldRecord;
+    repaint();
+}
+
 void TransportButton::paintButton(juce::Graphics& g, bool highlighted, bool down)
 {
     auto bounds = getLocalBounds().toFloat().reduced(1.0f);
-    auto fill = icon == Icon::play && playing ? juce::Colour(0xff3d8f5a) : juce::Colour(0xff2e343d);
+    auto fill = icon == Icon::play && playing ? juce::Colour(0xff3d8f5a)
+              : icon == Icon::record && recording ? juce::Colour(0xffa33b3b)
+              : juce::Colour(0xff2e343d);
 
     if (down)
         fill = fill.brighter(0.08f);
@@ -897,6 +909,19 @@ void TransportButton::paintButton(juce::Graphics& g, bool highlighted, bool down
         juce::Path triangle;
         triangle.addTriangle(cx - 4.0f, cy - 7.0f, cx - 4.0f, cy + 7.0f, cx + 8.0f, cy);
         g.fillPath(triangle);
+        return;
+    }
+
+    if (icon == Icon::record)
+    {
+        if (recording)
+        {
+            g.fillRoundedRectangle(cx - 6.0f, cy - 6.0f, 12.0f, 12.0f, 2.0f);
+            return;
+        }
+
+        g.setColour(juce::Colour(0xffe15b5b));
+        g.fillEllipse(cx - 7.0f, cy - 7.0f, 14.0f, 14.0f);
         return;
     }
 
@@ -1299,13 +1324,17 @@ class OutputRow : public juce::Component
 public:
     void setStrips(const std::vector<juce::Component*>& next)
     {
-        for (auto* strip : strips)
-        {
-            strip->setVisible(false);
-            removeChildComponent(strip);
-        }
-
+        auto previous = strips;
         strips = next;
+
+        for (auto* strip : previous)
+        {
+            if (strip->getParentComponent() == this)
+            {
+                strip->setVisible(false);
+                removeChildComponent(strip);
+            }
+        }
 
         for (auto* strip : strips)
         {
@@ -1422,6 +1451,25 @@ public:
                 addInput(strip.get());
 
         resized();
+    }
+
+    void showEffects()
+    {
+        clearInputs();
+
+        for (auto& strip : fx)
+            addInput(strip.get());
+
+        for (int bus = 12; bus < numBuses; ++bus)
+            addInput(buses[(size_t) bus].get());
+
+        resized();
+    }
+
+    void highlightBusStrip(int bus)
+    {
+        for (int i = 0; i < numBuses; ++i)
+            buses[(size_t) i]->setSelected(i == bus);
     }
 
     void showDcaMembers(int dca)
@@ -1766,6 +1814,18 @@ public:
         addAndMakeVisible (*groupPad);
         processing = std::make_unique<BusProcessingView> (model);
         addAndMakeVisible (*processing);
+        insertButton.setClickingTogglesState (true);
+        insertButton.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xff3d6f8f));
+        insertButton.setTooltip ("Insert a graphic EQ from an FX slot");
+        insertButton.onClick = [this]
+        {
+            insertOpen = insertButton.getToggleState();
+            refresh();
+            resized();
+        };
+        addAndMakeVisible (insertButton);
+        insertEditor = std::make_unique<InsertEditor> (model);
+        addAndMakeVisible (*insertEditor);
 
         matrixHeading.setText ("To Matrix", juce::dontSendNotification);
         matrixHeading.setColour (juce::Label::textColourId, dim());
@@ -1891,12 +1951,17 @@ public:
         }
 
         const bool bus = root.startsWith ("/bus/");
-        groupPad->setVisible (bus);
+        groupPad->setVisible (bus && ! insertOpen);
+        insertEditor->setVisible (insertOpen);
+        processing->setVisible (! insertOpen);
+
+        if (insertOpen)
+            insertEditor->refresh();
 
         if (bus)
             groupPad->setRoot (root);
 
-        const bool feedsMatrices = bus || root.startsWith ("/main/");
+        const bool feedsMatrices = (bus || root.startsWith ("/main/")) && ! insertOpen;
         matrixHeading.setVisible (feedsMatrices);
         applyingMatrix = true;
 
@@ -1905,7 +1970,7 @@ public:
             matrixName[(size_t) matrix].setVisible (feedsMatrices);
             matrixName[(size_t) matrix].setText (model.getMatrixName (matrix), juce::dontSendNotification);
             matrixLevel[(size_t) matrix].setVisible (feedsMatrices);
-            matrixPre[(size_t) matrix].setVisible (bus);
+            matrixPre[(size_t) matrix].setVisible (feedsMatrices && bus);
 
             if (! feedsMatrices)
                 continue;
@@ -1947,12 +2012,19 @@ public:
         auto area = getLocalBounds().reduced (16, 10);
         auto header = area.removeFromTop (32);
         title.setBounds (header.removeFromLeft (160));
+        insertButton.setBounds (header.removeFromLeft (72).reduced (4, 2));
         centerTarget.setBounds (header.removeFromRight (52).reduced (3, 2));
         stereoTarget.setBounds (header.removeFromRight (52).reduced (3, 2));
         stripTarget.setBounds (header.removeFromRight (120).reduced (3, 2));
 
         const bool bus = root.startsWith ("/bus/");
-        const bool feedsMatrices = bus || root.startsWith ("/main/");
+        const bool feedsMatrices = (bus || root.startsWith ("/main/")) && ! insertOpen;
+
+        if (insertOpen)
+        {
+            insertEditor->setBounds (area.reduced (4, 4));
+            return;
+        }
 
         if (bus)
             groupPad->setBounds (area.removeFromRight (juce::jmin (220, area.getWidth() / 4)).reduced (4, 0));
@@ -1998,6 +2070,7 @@ private:
         root = newRoot;
         title.setEditable (false, root.startsWith ("/bus/") || root.startsWith ("/mtx/"), false);
         processing->setRoot (root);
+        insertEditor->setRoot (root);
         refresh();
         resized();
     }
@@ -2018,6 +2091,9 @@ private:
     juce::Slider makeup;
     std::unique_ptr<GroupPad> groupPad;
     std::unique_ptr<BusProcessingView> processing;
+    juce::TextButton insertButton { "Insert" };
+    std::unique_ptr<InsertEditor> insertEditor;
+    bool insertOpen = false;
     juce::Label matrixHeading;
     std::array<juce::Label, numMatrices> matrixName;
     std::array<juce::Slider, numMatrices> matrixLevel;
@@ -2142,7 +2218,7 @@ MainComponent::MainComponent()
 
         syncTransport();
     };
-    playButton.setTooltip ("Play or pause every source together");
+    playButton.setTooltip ("Play or pause the sources in the mix");
     addAndMakeVisible (playButton);
 
     restartButton.onClick = [this]
@@ -2150,7 +2226,7 @@ MainComponent::MainComponent()
         engine.restart();
         syncTransport();
     };
-    restartButton.setTooltip ("Return to the start and play");
+    restartButton.setTooltip ("Return the sources to the start");
     addAndMakeVisible (restartButton);
 
     timeline.setSliderStyle (juce::Slider::LinearHorizontal);
@@ -2171,13 +2247,32 @@ MainComponent::MainComponent()
         if (scrubbing || timeline.isMouseButtonDown())
             engine.seek (timeline.getValue());
     };
-    timeline.setTooltip ("Move the playhead");
+    timeline.setTooltip ("Move through the sources");
     addAndMakeVisible (timeline);
 
     timeLabel.setColour (juce::Label::textColourId, dim());
     timeLabel.setFont (juce::Font (juce::FontOptions (13.0f)));
     timeLabel.setJustificationType (juce::Justification::centredRight);
     addAndMakeVisible (timeLabel);
+    playbackHeading.setColour (juce::Label::textColourId, text());
+    playbackHeading.setFont (juce::Font (juce::FontOptions (13.0f)));
+    playbackHeading.setJustificationType (juce::Justification::centredLeft);
+    addAndMakeVisible (playbackHeading);
+
+    recordButton.onClick = [this] { beginRecording(); };
+    recordButton.setTooltip ("Record the mix outputs you have chosen");
+    addAndMakeVisible (recordButton);
+    recordChoose.onClick = [this] { showRecordChoices(); };
+    recordChoose.setTooltip ("Choose which post-fader mix outputs to record");
+    addAndMakeVisible (recordChoose);
+    recordSummary.setColour (juce::Label::textColourId, text());
+    recordSummary.setFont (juce::Font (juce::FontOptions (13.0f)));
+    recordSummary.setJustificationType (juce::Justification::centredLeft);
+    addAndMakeVisible (recordSummary);
+    recordTime.setColour (juce::Label::textColourId, dim());
+    recordTime.setFont (juce::Font (juce::FontOptions (13.0f)));
+    recordTime.setJustificationType (juce::Justification::centredRight);
+    addAndMakeVisible (recordTime);
 
     sourceHeading.setFont (juce::Font (juce::FontOptions (20.0f)));
     sourceHeading.setColour (juce::Label::textColourId, text());
@@ -2221,6 +2316,7 @@ MainComponent::MainComponent()
 
         dcaFilter = dca;
         faderBay->showDcaMembers (dca);
+        syncEffectBuses();
         applySendMode();
         selectSpare (3, dca);
         resized();
@@ -2435,9 +2531,9 @@ void MainComponent::paint (juce::Graphics& g)
 {
     g.fillAll (background());
     g.setColour (panel());
-    g.fillRect (0, 0, getWidth(), 78);
+    g.fillRect (0, 0, getWidth(), 42);
     g.setColour (juce::Colour (0xff2c333b));
-    g.fillRect (0, 77, getWidth(), 1);
+    g.fillRect (0, 41, getWidth(), 1);
 }
 
 void MainComponent::resized()
@@ -2448,6 +2544,8 @@ void MainComponent::resized()
     top.removeFromLeft (8);
     sourcesButton.setBounds (top.removeFromLeft (96));
     top.removeFromLeft (6);
+    routingButton.setBounds (top.removeFromLeft (84));
+    top.removeFromLeft (6);
     addButton.setBounds (top.removeFromRight (110).reduced (4, 0));
     listenBox.setBounds (top.removeFromRight (110).reduced (4, 0));
     listenLabel.setBounds (top.removeFromRight (48));
@@ -2456,16 +2554,6 @@ void MainComponent::resized()
     outputLabel.setBounds (top.removeFromRight (56));
     mixBox.setBounds (top.removeFromRight (96).reduced (4, 0));
     mixLabel.setBounds (top.removeFromRight (36));
-
-    auto transport = area.removeFromTop (36).reduced (10, 4);
-    playButton.setBounds (transport.removeFromLeft (36));
-    transport.removeFromLeft (6);
-    restartButton.setBounds (transport.removeFromLeft (36));
-    transport.removeFromLeft (8);
-    routingButton.setBounds (transport.removeFromLeft (84));
-    transport.removeFromLeft (10);
-    timeLabel.setBounds (transport.removeFromRight (118));
-    timeline.setBounds (transport.reduced (0, 2));
 
     routingView.setVisible (routingOpen);
 
@@ -2493,6 +2581,15 @@ void MainComponent::resized()
         mainSelect.setVisible (false);
         centerSelect.setVisible (false);
         muteHeading.setVisible (false);
+        playButton.setVisible (false);
+        restartButton.setVisible (false);
+        timeline.setVisible (false);
+        timeLabel.setVisible (false);
+        playbackHeading.setVisible (false);
+        recordButton.setVisible (false);
+        recordChoose.setVisible (false);
+        recordSummary.setVisible (false);
+        recordTime.setVisible (false);
         sendsButton.setVisible (false);
         widthButton.setVisible (false);
         outputRow->setVisible (false);
@@ -2514,6 +2611,15 @@ void MainComponent::resized()
     }
 
     viewport.setVisible (true);
+    playButton.setVisible (true);
+    restartButton.setVisible (true);
+    timeline.setVisible (true);
+    timeLabel.setVisible (true);
+    playbackHeading.setVisible (true);
+    recordButton.setVisible (true);
+    recordChoose.setVisible (true);
+    recordSummary.setVisible (true);
+    recordTime.setVisible (true);
     sendsButton.setVisible (true);
     widthButton.setVisible (true);
 
@@ -2570,12 +2676,31 @@ void MainComponent::resized()
 
     status.setBounds (area.removeFromBottom (18).reduced (10, 0));
     auto inputBanks = area.removeFromLeft (92);
-    auto muteColumn = area.removeFromRight (64);
     const int outputStrips = outputPage == 4 ? 1 : outputPage == 3 ? 7 : 8;
     const int outputStripWidth = outputPage == 4 ? 148 : 88;
-    const int outputWidth = juce::jmin (outputStrips * outputStripWidth, juce::jmax (outputStrips * 72, (area.getWidth() - 108) / 2));
-    auto outputChannels = area.removeFromRight (outputWidth).reduced (2, 4);
-    auto outputBanks = area.removeFromRight (108);
+    const int outputWidth = juce::jmin (outputStrips * outputStripWidth, juce::jmax (outputStrips * 72, (area.getWidth() - 64 - 108) / 2));
+    auto rightSide = area.removeFromRight (64 + outputWidth + 108);
+    auto deck = rightSide.removeFromTop (100).reduced (6, 4);
+    auto playbackRow = deck.removeFromTop (28);
+    playButton.setBounds (playbackRow.removeFromLeft (32));
+    playbackRow.removeFromLeft (4);
+    restartButton.setBounds (playbackRow.removeFromLeft (32));
+    playbackRow.removeFromLeft (8);
+    playbackHeading.setBounds (playbackRow.removeFromLeft (78));
+    timeLabel.setBounds (playbackRow.removeFromRight (juce::jmin (118, playbackRow.getWidth())));
+    deck.removeFromTop (2);
+    timeline.setBounds (deck.removeFromTop (18));
+    deck.removeFromTop (6);
+    auto recordRow = deck.removeFromTop (28);
+    recordButton.setBounds (recordRow.removeFromLeft (32));
+    recordRow.removeFromLeft (4);
+    recordChoose.setBounds (recordRow.removeFromLeft (76));
+    recordRow.removeFromLeft (6);
+    recordTime.setBounds (recordRow.removeFromRight (juce::jmin (56, recordRow.getWidth())));
+    recordSummary.setBounds (recordRow);
+    auto muteColumn = rightSide.removeFromRight (64);
+    auto outputChannels = rightSide.removeFromRight (outputWidth).reduced (2, 4);
+    auto outputBanks = rightSide.removeFromRight (108);
     const bool showMain = outputPage == 4;
     const bool showCenter = outputPage == 3;
     mainFader.setVisible (showMain);
@@ -2601,8 +2726,8 @@ void MainComponent::resized()
     widthButton.setBounds (widthSlot.reduced (4, 4));
     widthButton.setButtonText (inputWidth == 16 ? "16" : "8");
     const int inputHeight = juce::jmax (1, inputBanks.getHeight() / inputPages);
-    const char* wideNames[] = { "1-16", "17-32", "Aux FX" };
-    const char* narrowNames[] = { "1-8", "9-16", "17-24", "25-32", "Aux", "FX" };
+    const char* wideNames[] = { "1-16", "17-32", "Aux FX", "Effects" };
+    const char* narrowNames[] = { "1-8", "9-16", "17-24", "25-32", "Aux", "Effects" };
 
     for (int i = 0; i < 6; ++i)
     {
@@ -2613,6 +2738,10 @@ void MainComponent::resized()
             continue;
 
         inputBankButton[i].setButtonText (inputWidth == 16 ? wideNames[i] : narrowNames[i]);
+        const bool effectsButton = (inputWidth == 16 && i == 3) || (inputWidth == 8 && i == 5);
+        inputBankButton[i].setTooltip (effectsButton
+            ? "FX returns, then buses 13 to 16: Vintage Room, Hall, Stereo Delay, and Stereo Chorus."
+            : juce::String());
         inputBankButton[i].setBounds (inputBanks.removeFromTop (inputHeight).reduced (4, 3));
         const bool on = dcaFilter < 0 && inputPage == i;
         inputBankButton[i].setColour (juce::TextButton::buttonColourId, on ? juce::Colour (0xff3d6f8f) : juce::Colour (0xff232830));
@@ -2672,7 +2801,23 @@ void MainComponent::resized()
 
 int MainComponent::inputPageCount() const
 {
-    return inputWidth == 16 ? 3 : 6;
+    return inputWidth == 16 ? 4 : 6;
+}
+
+bool MainComponent::effectsPage() const
+{
+    if (dcaFilter >= 0)
+        return false;
+
+    return (inputWidth == 16 && inputPage == 3) || (inputWidth == 8 && inputPage == 5);
+}
+
+void MainComponent::syncEffectBuses()
+{
+    if (outputPage != 2 || outputRow == nullptr || faderBay == nullptr)
+        return;
+
+    faderBay->showBuses (*outputRow, 8, effectsPage() ? 4 : 8);
 }
 
 void MainComponent::showInputPage (int page)
@@ -2686,8 +2831,10 @@ void MainComponent::showInputPage (int page)
             faderBay->showChannelRange (0, 16);
         else if (inputPage == 1)
             faderBay->showChannelRange (16, 16);
-        else
+        else if (inputPage == 2)
             faderBay->showReturns (true, true, true);
+        else
+            faderBay->showEffects();
     }
     else if (inputPage < 4)
     {
@@ -2699,9 +2846,10 @@ void MainComponent::showInputPage (int page)
     }
     else
     {
-        faderBay->showReturns (false, false, true);
+        faderBay->showEffects();
     }
 
+    syncEffectBuses();
     applySendMode();
 
     const bool channelPage = inputWidth == 16 ? inputPage < 2 : inputPage < 4;
@@ -2716,7 +2864,7 @@ void MainComponent::showInputPage (int page)
 
         selectChannel (selectedChannel);
     }
-    else if (inputWidth == 8 && inputPage == 5)
+    else if (effectsPage())
     {
         selectSpare (2, 0);
     }
@@ -2737,7 +2885,7 @@ void MainComponent::showOutputPage (int page)
     else if (outputPage == 1)
         faderBay->showBuses (*outputRow, 0, 8);
     else if (outputPage == 2)
-        faderBay->showBuses (*outputRow, 8, 8);
+        faderBay->showBuses (*outputRow, 8, effectsPage() ? 4 : 8);
     else if (outputPage == 3)
         faderBay->showMatrices (*outputRow);
     else
@@ -2773,7 +2921,17 @@ void MainComponent::selectSpare (int kind, int index)
         name = model.getDcaName (index);
 
     if (kind == 2)
+    {
         fxEditor->setReturn (index);
+        const int slot = index / 2;
+
+        if (slot < 4)
+        {
+            faderBay->highlightBusStrip (12 + slot);
+            armedBus = 12 + slot;
+            applySendMode();
+        }
+    }
     else if (kind == 0)
         spareTitle.setText (name + " is on the fader bank. Aux playback is not mixed yet. Stereo and Mono are stored for when it is.", juce::dontSendNotification);
     else if (kind == 1)
@@ -2787,6 +2945,12 @@ void MainComponent::selectSpare (int kind, int index)
 
 void MainComponent::selectBus (int busIndex)
 {
+    if (effectsPage() && busIndex >= 12)
+    {
+        selectSpare (2, (busIndex - 12) * 2);
+        return;
+    }
+
     const bool changed = topEditor != 1 || sourcesOpen || routingOpen;
     topEditor = 1;
     closeTopPages();
@@ -2912,6 +3076,78 @@ void MainComponent::closeTopPages()
     routingButton.setToggleState (false, juce::dontSendNotification);
 }
 
+class RecordChoices : public juce::Component
+{
+public:
+    RecordChoices(ConsoleModel& model, MixRecorder& recorderToUse, std::function<void()> changed)
+        : recorder(recorderToUse),
+          onChange(std::move(changed))
+    {
+        hint.setText("Each ticked output is saved as its own WAV, after the fader.", juce::dontSendNotification);
+        hint.setColour(juce::Label::textColourId, juce::Colour(0xff8b98a3));
+        hint.setFont(juce::Font(juce::FontOptions(12.0f)));
+        hint.setJustificationType(juce::Justification::topLeft);
+        addAndMakeVisible(hint);
+
+        auto add = [this](const juce::String& name, int target)
+        {
+            auto button = std::make_unique<juce::ToggleButton>(name);
+            button->setToggleState(recorder.targetEnabled(target), juce::dontSendNotification);
+            button->setColour(juce::ToggleButton::textColourId, juce::Colour(0xffd7e2ea));
+            button->setColour(juce::ToggleButton::tickColourId, juce::Colour(0xffe15b5b));
+            button->onClick = [this, target, raw = button.get()]
+            {
+                recorder.setTarget(target, raw->getToggleState());
+
+                if (onChange != nullptr)
+                    onChange();
+            };
+            list.addAndMakeVisible(*button);
+            toggles.push_back(std::move(button));
+        };
+
+        add("Main", recordMain);
+        add("Center", recordCenter);
+
+        for (int bus = 0; bus < numBuses; ++bus)
+            add(model.getBusName(bus), recordBus(bus));
+
+        for (int matrix = 0; matrix < numMatrices; ++matrix)
+            add(model.getMatrixName(matrix), recordMatrix(matrix));
+
+        viewport.setViewedComponent(&list, false);
+        viewport.setScrollBarsShown(true, false);
+        addAndMakeVisible(viewport);
+        setSize(280, 420);
+    }
+
+    void paint(juce::Graphics& g) override
+    {
+        g.fillAll(juce::Colour(0xff1a1f24));
+    }
+
+    void resized() override
+    {
+        auto area = getLocalBounds().reduced(8, 6);
+        hint.setBounds(area.removeFromTop(36));
+        viewport.setBounds(area);
+        const int rowHeight = 24;
+        list.setSize(std::max(40, viewport.getMaximumVisibleWidth()), (int) toggles.size() * rowHeight);
+        auto rows = list.getLocalBounds();
+
+        for (auto& toggle : toggles)
+            toggle->setBounds(rows.removeFromTop(rowHeight));
+    }
+
+private:
+    MixRecorder& recorder;
+    std::function<void()> onChange;
+    juce::Label hint;
+    juce::Component list;
+    juce::Viewport viewport;
+    std::vector<std::unique_ptr<juce::ToggleButton>> toggles;
+};
+
 void MainComponent::syncTransport()
 {
     playButton.setPlaying (engine.isPlaying());
@@ -2931,6 +3167,96 @@ void MainComponent::syncTransport()
 
     timeline.setValue (position, juce::dontSendNotification);
     movingTimeline = false;
+    recordButton.setRecording (engine.recorder().isRecording());
+    recordChoose.setEnabled (! engine.recorder().isRecording());
+    recordSummary.setText (recordingSummary(), juce::dontSendNotification);
+    recordTime.setText (formatTime (engine.recorder().secondsRecorded()), juce::dontSendNotification);
+}
+
+void MainComponent::showRecordChoices()
+{
+    if (engine.recorder().isRecording())
+        return;
+
+    auto choices = std::make_unique<RecordChoices> (model, engine.recorder(), [this]
+    {
+        recordSummary.setText (recordingSummary(), juce::dontSendNotification);
+    });
+    juce::CallOutBox::launchAsynchronously (std::move (choices), recordChoose.getScreenBounds(), nullptr);
+}
+
+void MainComponent::refreshRecordNames()
+{
+    auto& recorder = engine.recorder();
+    recorder.setTargetName (recordMain, "Main");
+    recorder.setTargetName (recordCenter, "Center");
+
+    for (int bus = 0; bus < numBuses; ++bus)
+        recorder.setTargetName (recordBus (bus), model.getBusName (bus));
+
+    for (int matrix = 0; matrix < numMatrices; ++matrix)
+        recorder.setTargetName (recordMatrix (matrix), model.getMatrixName (matrix));
+}
+
+juce::String MainComponent::recordingSummary() const
+{
+    const auto& recorder = engine.recorder();
+    juce::StringArray names;
+
+    if (recorder.targetEnabled (recordMain))
+        names.add ("Main");
+
+    if (recorder.targetEnabled (recordCenter))
+        names.add ("Center");
+
+    for (int bus = 0; bus < numBuses; ++bus)
+        if (recorder.targetEnabled (recordBus (bus)))
+            names.add (model.getBusName (bus));
+
+    for (int matrix = 0; matrix < numMatrices; ++matrix)
+        if (recorder.targetEnabled (recordMatrix (matrix)))
+            names.add (model.getMatrixName (matrix));
+
+    if (names.isEmpty())
+        return "Choose the mix";
+
+    if (names.size() == 1)
+        return names[0];
+
+    return names[0] + " + " + juce::String (names.size() - 1);
+}
+
+void MainComponent::beginRecording()
+{
+    if (engine.recorder().isRecording())
+    {
+        engine.recorder().stop();
+        syncTransport();
+        return;
+    }
+
+    if (engine.recorder().enabledCount() == 0)
+    {
+        showRecordChoices();
+        return;
+    }
+
+    refreshRecordNames();
+    chooser = std::make_unique<juce::FileChooser> ("Choose a folder for the recording",
+                                                    juce::File::getSpecialLocation (juce::File::userDocumentsDirectory));
+    constexpr auto browserFlags = juce::FileBrowserComponent::openMode
+                                | juce::FileBrowserComponent::canSelectDirectories;
+    chooser->launchAsync (browserFlags, [this] (const juce::FileChooser& box)
+    {
+        const auto folder = box.getResult();
+
+        if (! folder.isDirectory() || engine.recorder().isRecording())
+            return;
+
+        refreshRecordNames();
+        engine.recorder().start (folder);
+        syncTransport();
+    });
 }
 
 void MainComponent::chooseAudio()
@@ -3095,6 +3421,17 @@ juce::String MainComponent::statusText()
         if (error.isNotEmpty())
             parts.add (error);
     }
+
+    if (engine.recorder().isRecording())
+        parts.add ("Recording " + recordingSummary());
+
+    const auto recordError = engine.recorder().lastError();
+
+    if (recordError.isNotEmpty())
+        parts.add (recordError);
+
+    if (engine.recorder().overflowed())
+        parts.add ("The recording dropped audio");
 
     return parts.joinIntoString ("   ");
 }

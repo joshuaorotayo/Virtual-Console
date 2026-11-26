@@ -33,6 +33,46 @@ int indexOf(const juce::String& text, int count)
     return value - 1;
 }
 
+bool writeFxInsert(MixPoint& strip, const juce::StringArray& tokens, int from, int value)
+{
+    if (tokens.size() <= from + 1 || tokens[from] != "fxinsert")
+        return false;
+
+    if (tokens[from + 1] == "slot")
+    {
+        strip.fxInsert.store(value < 0 ? -1 : std::clamp(value, 0, numFxSlots - 1), std::memory_order_relaxed);
+        return true;
+    }
+
+    if (tokens[from + 1] == "pos")
+    {
+        strip.fxInsertPost.store(value != 0 ? 1 : 0, std::memory_order_relaxed);
+        return true;
+    }
+
+    return false;
+}
+
+bool readFxInsert(const MixPoint& strip, const juce::StringArray& tokens, int from, int& value)
+{
+    if (tokens.size() <= from + 1 || tokens[from] != "fxinsert")
+        return false;
+
+    if (tokens[from + 1] == "slot")
+    {
+        value = strip.fxInsert.load(std::memory_order_relaxed);
+        return true;
+    }
+
+    if (tokens[from + 1] == "pos")
+    {
+        value = strip.fxInsertPost.load(std::memory_order_relaxed);
+        return true;
+    }
+
+    return false;
+}
+
 int routedOutputIndex(const juce::StringArray& tokens, int& bank)
 {
     if (tokens.size() < 4 || tokens[0] != "outputs")
@@ -1943,6 +1983,9 @@ bool ConsoleModel::assignInt(const juce::String& path, int value)
             return true;
         }
 
+        if (writeFxInsert(strip, tokens, 2, value))
+            return true;
+
         if (setMixOn(strip, tokens, 2, value))
             return true;
 
@@ -1988,6 +2031,9 @@ bool ConsoleModel::assignInt(const juce::String& path, int value)
             return true;
         }
 
+        if (writeFxInsert(buses[(size_t) index], tokens, 2, value))
+            return true;
+
         return setMixOn(buses[(size_t) index], tokens, 2, value);
     }
 
@@ -2008,6 +2054,9 @@ bool ConsoleModel::assignInt(const juce::String& path, int value)
             strip.insertPost.store(value != 0 ? 1 : 0, std::memory_order_relaxed);
             return true;
         }
+
+        if (writeFxInsert(strip, tokens, 2, value))
+            return true;
 
         if (tokens.size() >= 4 && tokens[2] == "gate" && tokens[3] == "on")
         {
@@ -2051,6 +2100,10 @@ bool ConsoleModel::assignInt(const juce::String& path, int value)
         }
 
         auto& mix = tokens[1] == "m" ? mainMono : mainSt;
+
+        if (writeFxInsert(mix, tokens, 2, value))
+            return true;
+
         return setMixOn(mix, tokens, 2, value);
     }
 
@@ -2091,7 +2144,7 @@ bool ConsoleModel::assignInt(const juce::String& path, int value)
 
         if (tokens[2] == "type")
         {
-            fx[(size_t) slot].type.store(std::clamp(value, 0, (int) FxAlgo::tremoloPanner), std::memory_order_relaxed);
+            fx[(size_t) slot].type.store(std::clamp(value, 0, (int) FxAlgo::dualGraphicEq), std::memory_order_relaxed);
             return true;
         }
 
@@ -2384,6 +2437,9 @@ bool ConsoleModel::getInt(const juce::String& path, int& value) const
             return true;
         }
 
+        if (readFxInsert(strip, tokens, 2, value))
+            return true;
+
         if (getMixOn(strip, tokens, 2, value))
             return true;
 
@@ -2429,6 +2485,9 @@ bool ConsoleModel::getInt(const juce::String& path, int& value) const
             return true;
         }
 
+        if (readFxInsert(buses[(size_t) index], tokens, 2, value))
+            return true;
+
         return getMixOn(buses[(size_t) index], tokens, 2, value);
     }
 
@@ -2449,6 +2508,9 @@ bool ConsoleModel::getInt(const juce::String& path, int& value) const
             value = strip.insertPost.load(std::memory_order_relaxed);
             return true;
         }
+
+        if (readFxInsert(strip, tokens, 2, value))
+            return true;
 
         if (tokens.size() >= 4 && tokens[2] == "gate" && tokens[3] == "on")
         {
@@ -2492,6 +2554,10 @@ bool ConsoleModel::getInt(const juce::String& path, int& value) const
         }
 
         const auto& mix = tokens[1] == "m" ? mainMono : mainSt;
+
+        if (readFxInsert(mix, tokens, 2, value))
+            return true;
+
         return getMixOn(mix, tokens, 2, value);
     }
 

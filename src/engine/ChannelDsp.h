@@ -9,6 +9,8 @@
 namespace vc
 {
 
+class FxRack;
+
 // One channel strip: delay, trim, high-pass, gate, EQ, compressor.
 // State lives here. Parameters are read from the console at each block.
 class ChannelDsp
@@ -34,14 +36,18 @@ public:
     void ensureCapacity(int samples);
     float preEqSample(int sample) const noexcept;
     float postEqSample(int sample) const noexcept;
-    void process(const float* input, float* output, int numSamples, const Channel& channel) noexcept;
+    void process(const float* input, float* output, int numSamples, const Channel& channel,
+                 FxRack* insertFx, int insertSlot, bool insertPost) noexcept;
     void processLinked(ChannelDsp& partner,
                        const float* inputA,
                        const float* inputB,
                        float* outputA,
                        float* outputB,
                        int numSamples,
-                       const Channel& leader) noexcept;
+                       const Channel& leader,
+                       FxRack* insertFx,
+                       int insertSlot,
+                       bool insertPost) noexcept;
 
 private:
     void configure(const Channel& channel) noexcept;

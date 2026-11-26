@@ -10,12 +10,13 @@
 namespace vc
 {
 
-// Send effects for slots 1–4. These are equivalent algorithms, not a copy of
-// another mixer's DSP. Slots 5–8 stay empty until insert effects are processed.
+// Send effects for slots 1–4, and graphic EQ for inserts. These are equivalent
+// algorithms, not a copy of another mixer's DSP. Slots 5–8 are insert only.
 constexpr int fxParPrimary = 0;
 constexpr int fxParSecondary = 1;
 constexpr int fxParSize = 2;
 constexpr int fxParDamp = 3;
+constexpr int graphicEqBands = 31;
 
 enum class FxAlgo : int
 {
@@ -26,17 +27,28 @@ enum class FxAlgo : int
     stereoChorus = 4,
     stereoFlanger = 5,
     stereoPhaser = 6,
-    tremoloPanner = 7
+    tremoloPanner = 7,
+    graphicEq = 8,
+    dualGraphicEq = 9
 };
+
+inline bool fxIsGraphicEq(int type) noexcept
+{
+    return type == (int) FxAlgo::graphicEq || type == (int) FxAlgo::dualGraphicEq;
+}
 
 const char* fxAlgoName(int type) noexcept;
 void storeFxDefaults(FxSlot& slot, int type) noexcept;
+float graphicEqFrequency(int band) noexcept;
+float graphicEqGainDb(float unit) noexcept;
 
 class FxRack
 {
 public:
     void prepare(double newSampleRate);
     void process(int slot, const FxSlot& settings, float inL, float inR, float& outL, float& outR) noexcept;
+    void prepareInsert(int slot, const FxSlot& settings) noexcept;
+    void processInsert(int slot, float& left, float& right) noexcept;
 
 private:
     struct Line
@@ -76,8 +88,34 @@ private:
         void processTremolo(const FxSlot& settings, double sampleRate, float inL, float inR, float& outL, float& outR) noexcept;
     };
 
+    struct GraphicBand
+    {
+        float b0 = 1.0f;
+        float b1 = 0.0f;
+        float b2 = 0.0f;
+        float a1 = 0.0f;
+        float a2 = 0.0f;
+        float z1 = 0.0f;
+        float z2 = 0.0f;
+        bool active = false;
+
+        void setUnity() noexcept;
+        void setNormalized(float nb0, float nb1, float nb2, float na1, float na2) noexcept;
+        float tick(float sample) noexcept;
+    };
+
+    struct GraphicVoice
+    {
+        std::array<GraphicBand, graphicEqBands> left;
+        std::array<GraphicBand, graphicEqBands> right;
+
+        void reset() noexcept;
+        void process(float& leftSample, float& rightSample) noexcept;
+    };
+
     double sampleRate = 48000.0;
     std::array<Voice, 4> voices;
+    std::array<GraphicVoice, numFxSlots> graphic;
 };
 
 } // namespace vc

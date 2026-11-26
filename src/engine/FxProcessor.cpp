@@ -2,6 +2,8 @@
 
 #include "engine/FxProcessor.h"
 
+#include "dsp/FilterDesign.h"
+
 #include <algorithm>
 #include <cmath>
 
@@ -58,14 +60,41 @@ const char* fxAlgoName(int type) noexcept
         case (int) FxAlgo::stereoFlanger: return "Stereo Flanger";
         case (int) FxAlgo::stereoPhaser: return "Stereo Phaser";
         case (int) FxAlgo::tremoloPanner: return "Tremolo / Panner";
+        case (int) FxAlgo::graphicEq: return "Graphic EQ";
+        case (int) FxAlgo::dualGraphicEq: return "Dual Graphic EQ";
         default: return "Empty";
     }
 }
 
+float graphicEqFrequency(int band) noexcept
+{
+    static constexpr float frequencies[graphicEqBands] = {
+        20.0f, 25.0f, 31.5f, 40.0f, 50.0f, 63.0f, 80.0f, 100.0f, 125.0f, 160.0f,
+        200.0f, 250.0f, 315.0f, 400.0f, 500.0f, 630.0f, 800.0f, 1000.0f, 1250.0f, 1600.0f,
+        2000.0f, 2500.0f, 3150.0f, 4000.0f, 5000.0f, 6300.0f, 8000.0f, 10000.0f, 12500.0f, 16000.0f,
+        20000.0f
+    };
+
+    return frequencies[(size_t) std::clamp(band, 0, graphicEqBands - 1)];
+}
+
+float graphicEqGainDb(float unit) noexcept
+{
+    return (std::clamp(unit, 0.0f, 1.0f) - 0.5f) * 30.0f;
+}
+
 void storeFxDefaults(FxSlot& slot, int type) noexcept
 {
-    const int algo = std::clamp(type, 0, (int) FxAlgo::tremoloPanner);
+    const int algo = std::clamp(type, 0, (int) FxAlgo::dualGraphicEq);
     slot.type.store(algo, std::memory_order_relaxed);
+
+    if (fxIsGraphicEq(algo))
+    {
+        for (auto& value : slot.par)
+            value.store(0.5f, std::memory_order_relaxed);
+
+        return;
+    }
 
     float primary = 0.5f;
     float secondary = 0.5f;
@@ -195,6 +224,105 @@ void FxRack::prepare(double newSampleRate)
 
     for (auto& voice : voices)
         voice.prepare(sampleRate);
+
+    for (auto& voice : graphic)
+        voice.reset();
+}
+
+void FxRack::GraphicBand::setUnity() noexcept
+{
+    b0 = 1.0f;
+    b1 = 0.0f;
+    b2 = 0.0f;
+    a1 = 0.0f;
+    a2 = 0.0f;
+    active = false;
+}
+
+void FxRack::GraphicBand::setNormalized(float nb0, float nb1, float nb2, float na1, float na2) noexcept
+{
+    b0 = nb0;
+    b1 = nb1;
+    b2 = nb2;
+    a1 = na1;
+    a2 = na2;
+    active = true;
+}
+
+float FxRack::GraphicBand::tick(float sample) noexcept
+{
+    if (! active)
+        return sample;
+
+    const float output = b0 * sample + z1;
+    z1 = b1 * sample - a1 * output + z2;
+    z2 = b2 * sample - a2 * output;
+    return output;
+}
+
+void FxRack::GraphicVoice::reset() noexcept
+{
+    for (auto& band : left)
+    {
+        band.setUnity();
+        band.z1 = 0.0f;
+        band.z2 = 0.0f;
+    }
+
+    for (auto& band : right)
+    {
+        band.setUnity();
+        band.z1 = 0.0f;
+        band.z2 = 0.0f;
+    }
+}
+
+void FxRack::GraphicVoice::process(float& leftSample, float& rightSample) noexcept
+{
+    for (auto& band : left)
+        leftSample = band.tick(leftSample);
+
+    for (auto& band : right)
+        rightSample = band.tick(rightSample);
+}
+
+void FxRack::prepareInsert(int slot, const FxSlot& settings) noexcept
+{
+    if (slot < 0 || slot >= numFxSlots)
+        return;
+
+    const int type = settings.type.load(std::memory_order_relaxed);
+    auto& voice = graphic[(size_t) slot];
+    const bool dual = type == (int) FxAlgo::dualGraphicEq;
+    constexpr float bandQ = 4.32f;
+
+    for (int band = 0; band < graphicEqBands; ++band)
+    {
+        const float leftDb = graphicEqGainDb(param(settings, band));
+        const float rightDb = graphicEqGainDb(param(settings, dual ? graphicEqBands + band : band));
+        const float frequency = graphicEqFrequency(band);
+        auto load = [&](GraphicBand& filter, float gainDb)
+        {
+            if (std::abs(gainDb) < 0.2f)
+            {
+                filter.setUnity();
+                return;
+            }
+
+            const auto coeffs = designPeak(frequency, bandQ, gainDb, sampleRate);
+            filter.setNormalized(coeffs.b0, coeffs.b1, coeffs.b2, coeffs.a1, coeffs.a2);
+        };
+        load(voice.left[(size_t) band], leftDb);
+        load(voice.right[(size_t) band], rightDb);
+    }
+}
+
+void FxRack::processInsert(int slot, float& left, float& right) noexcept
+{
+    if (slot < 0 || slot >= numFxSlots)
+        return;
+
+    graphic[(size_t) slot].process(left, right);
 }
 
 void FxRack::process(int slot, const FxSlot& settings, float inL, float inR, float& outL, float& outR) noexcept

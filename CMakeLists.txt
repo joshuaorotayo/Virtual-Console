@@ -25,6 +25,7 @@ set(VC_CORE_SOURCES
     src/model/ConsoleModel.cpp
     src/engine/SharedSource.cpp
     src/engine/MixEngine.cpp
+    src/engine/MixRecorder.cpp
     src/engine/ChannelDsp.cpp
     src/engine/FxProcessor.cpp
 )
@@ -58,6 +59,7 @@ target_sources(VirtualConsole PRIVATE
     src/ui/ChannelStrip.cpp
     src/ui/ChannelEditor.cpp
     src/ui/FxEditor.cpp
+    src/ui/InsertEditor.cpp
     ${VC_CORE_SOURCES}
 )
 

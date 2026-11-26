@@ -3,6 +3,7 @@
 #include "engine/ChannelDsp.h"
 
 #include "dsp/FilterDesign.h"
+#include "engine/FxProcessor.h"
 #include "model/DspLaw.h"
 #include "model/FaderLaw.h"
 
@@ -332,6 +333,14 @@ float ChannelDsp::gateGain(float key) noexcept
     return gateLevel;
 }
 
+void applyChannelInsert(FxRack* insertFx, int insertSlot, bool insertPost, bool postPoint, float& left, float& right) noexcept
+{
+    if (insertFx == nullptr || insertSlot < 0 || insertPost != postPoint)
+        return;
+
+    insertFx->processInsert(insertSlot, left, right);
+}
+
 float ChannelDsp::compressorGain(float key) noexcept
 {
     if (! compEnabled)
@@ -381,7 +390,8 @@ float ChannelDsp::compressorGain(float key) noexcept
     return (1.0f - compMix) + compLevel * compMix;
 }
 
-void ChannelDsp::process(const float* input, float* output, int numSamples, const Channel& channel) noexcept
+void ChannelDsp::process(const float* input, float* output, int numSamples, const Channel& channel,
+                         FxRack* insertFx, int insertSlot, bool insertPost) noexcept
 {
     if (output == nullptr || numSamples <= 0)
         return;
@@ -393,9 +403,14 @@ void ChannelDsp::process(const float* input, float* output, int numSamples, cons
         const float sample = input != nullptr ? input[i] : 0.0f;
         const float front = delayTrimAndHpf(sample);
         const float gated = front * gateGain(front);
-        const float beforeEq = compPre ? gated * compressorGain(gated) : gated;
+        float beforeEq = compPre ? gated * compressorGain(gated) : gated;
+        float unused = beforeEq;
+        applyChannelInsert(insertFx, insertSlot, insertPost, false, beforeEq, unused);
         const float afterEq = shape(beforeEq);
-        output[i] = compPre ? afterEq : afterEq * compressorGain(afterEq);
+        float processedSample = compPre ? afterEq : afterEq * compressorGain(afterEq);
+        float processedRight = processedSample;
+        applyChannelInsert(insertFx, insertSlot, insertPost, true, processedSample, processedRight);
+        output[i] = processedSample;
 
         if (i < (int) preEq.size())
         {
@@ -411,7 +426,10 @@ void ChannelDsp::processLinked(ChannelDsp& partner,
                                float* outputA,
                                float* outputB,
                                int numSamples,
-                               const Channel& leader) noexcept
+                               const Channel& leader,
+                               FxRack* insertFx,
+                               int insertSlot,
+                               bool insertPost) noexcept
 {
     if (numSamples <= 0)
         return;
@@ -427,11 +445,15 @@ void ChannelDsp::processLinked(ChannelDsp& partner,
         const float gatedA = frontA * gate;
         const float gatedB = frontB * gate;
         const float preGain = compPre ? compressorGain(std::max(std::abs(gatedA), std::abs(gatedB))) : 1.0f;
-        const float beforeA = gatedA * preGain;
-        const float beforeB = gatedB * preGain;
+        float beforeA = gatedA * preGain;
+        float beforeB = gatedB * preGain;
+        applyChannelInsert(insertFx, insertSlot, insertPost, false, beforeA, beforeB);
         const float afterA = shape(beforeA);
         const float afterB = partner.shape(beforeB);
         const float compressed = compPre ? 1.0f : compressorGain(std::max(std::abs(afterA), std::abs(afterB)));
+        float outA = afterA * compressed;
+        float outB = afterB * compressed;
+        applyChannelInsert(insertFx, insertSlot, insertPost, true, outA, outB);
 
         if (i < (int) preEq.size())
         {
@@ -446,10 +468,10 @@ void ChannelDsp::processLinked(ChannelDsp& partner,
         }
 
         if (outputA != nullptr)
-            outputA[i] = afterA * compressed;
+            outputA[i] = outA;
 
         if (outputB != nullptr)
-            outputB[i] = afterB * compressed;
+            outputB[i] = outB;
     }
 }
 

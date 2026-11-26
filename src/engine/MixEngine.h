@@ -6,6 +6,7 @@
 #include "engine/SharedSource.h"
 #include "engine/ChannelDsp.h"
 #include "engine/FxProcessor.h"
+#include "engine/MixRecorder.h"
 
 #include <vector>
 
@@ -45,6 +46,8 @@ public:
     int sourceStatus(int index) const noexcept;
     juce::String sourceError(int index) const;
     double getSampleRate() const noexcept { return sampleRate; }
+    MixRecorder& recorder() noexcept { return mixRecorder; }
+    const MixRecorder& recorder() const noexcept { return mixRecorder; }
 
 private:
     struct StripSmooth
@@ -110,6 +113,7 @@ private:
     std::vector<float> soloBufR;
     std::array<std::vector<float>, numLocalOutputs> outputDelay;
     std::array<int, numLocalOutputs> outputWrite {};
+    MixRecorder mixRecorder;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MixEngine)
 };

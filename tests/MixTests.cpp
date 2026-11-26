@@ -2,6 +2,7 @@
 #include "model/DspLaw.h"
 #include "model/FaderLaw.h"
 
+#include <cmath>
 #include <initializer_list>
 
 #include <juce_audio_formats/juce_audio_formats.h>
@@ -729,6 +730,170 @@ public:
             engine.snapSmoothers();
             block = renderBlock (engine, 32);
             expectWithinAbsoluteError (block.left[24], 1.0f, 0.05f, "a still flanger passes the send");
+        }
+
+        beginTest ("a graphic EQ inserts on the channel");
+        {
+            std::vector<float> tone (2400);
+
+            for (int i = 0; i < (int) tone.size(); ++i)
+                tone[(size_t) i] = std::sin (2.0f * 3.14159265f * 1000.0f * (float) i / 48000.0f);
+
+            const auto level = [] (const std::vector<float>& samples)
+            {
+                double sum = 0.0;
+                const int start = (int) samples.size() / 2;
+
+                for (int i = start; i < (int) samples.size(); ++i)
+                    sum += (double) samples[(size_t) i] * (double) samples[(size_t) i];
+
+                return std::sqrt (sum / (double) (samples.size() - (size_t) start));
+            };
+
+            auto flat = renderSamples (tone, [] (ConsoleModel& model)
+            {
+                model.setFxType (4, (int) FxAlgo::graphicEq);
+                model.setInt ("/ch/01/fxinsert/slot", 4);
+                model.setInt ("/ch/01/fxinsert/pos", 0);
+            });
+            const double flatLevel = level (flat);
+            expect (flatLevel > 0.45 && flatLevel < 0.9, "a flat graphic EQ leaves the tone level");
+
+            auto raised = renderSamples (tone, [] (ConsoleModel& model)
+            {
+                model.setFxType (4, (int) FxAlgo::graphicEq);
+                model.setInt ("/ch/01/fxinsert/slot", 4);
+                model.setFloat ("/fx/05/par/18", 1.0f);
+            });
+            expect (level (raised) > flatLevel * 3.0, "the 1 kHz band raises a 1 kHz tone");
+
+            auto disengaged = renderSamples (tone, [] (ConsoleModel& model)
+            {
+                model.setFxType (4, (int) FxAlgo::graphicEq);
+                model.setInt ("/fx/05/on", 0);
+                model.setInt ("/ch/01/fxinsert/slot", 4);
+                model.setFloat ("/fx/05/par/18", 1.0f);
+            });
+            expect (level (disengaged) < flatLevel * 1.25, "a bypassed graphic EQ stays out of the channel");
+
+            auto dualRight = renderSamples (tone, [] (ConsoleModel& model)
+            {
+                model.setFxType (4, (int) FxAlgo::dualGraphicEq);
+                model.setInt ("/ch/01/fxinsert/slot", 4);
+                model.setFloat ("/fx/05/par/49", 1.0f);
+            });
+            expect (level (dualRight) < flatLevel * 1.25, "a mono channel uses the left side of a dual graphic EQ");
+        }
+
+        beginTest ("recording stores the chosen mix outputs");
+        {
+            const auto folder = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                                    .getChildFile ("virtual-console-record-test");
+            folder.deleteRecursively();
+            expect (folder.createDirectory().wasOk(), "recording folder");
+
+            MixRecorder recorder;
+            recorder.prepare (48000.0);
+            recorder.setTarget (recordMain, true);
+            recorder.setTarget (recordCenter, false);
+            recorder.setTarget (recordBus (0), true);
+            recorder.setTargetName (recordBus (0), "Bus 01");
+            expect (recorder.start (folder), recorder.lastError());
+
+            std::array<float, numBuses> busL {};
+            std::array<float, numBuses> busR {};
+            std::array<float, numMatrices> matrixL {};
+            std::array<float, numMatrices> matrixR {};
+            busL[0] = 0.125f;
+            busR[0] = 0.375f;
+
+            for (int sample = 0; sample < 256; ++sample)
+            {
+                recorder.push (0.25f, -0.5f, 0.0f, busL.data(), busR.data(), matrixL.data(), matrixR.data());
+
+                if ((sample + 1) % 64 == 0)
+                    recorder.endBlock();
+            }
+
+            recorder.stop();
+            expect (! recorder.isRecording(), "recording stops");
+            expect (! folder.getChildFile ("Center.wav").existsAsFile(), "an unticked output is not written");
+
+            const auto readChannel = [] (const juce::File& file, int channel)
+            {
+                juce::WavAudioFormat format;
+                auto stream = file.createInputStream();
+                std::unique_ptr<juce::AudioFormatReader> reader (format.createReaderFor (stream.release(), true));
+                std::vector<float> samples;
+
+                if (reader == nullptr)
+                    return samples;
+
+                juce::AudioBuffer<float> buffer ((int) reader->numChannels, (int) reader->lengthInSamples);
+                reader->read (&buffer, 0, (int) reader->lengthInSamples, 0, true, true);
+                samples.resize ((size_t) buffer.getNumSamples());
+
+                for (int i = 0; i < buffer.getNumSamples(); ++i)
+                    samples[(size_t) i] = buffer.getSample (channel, i);
+
+                return samples;
+            };
+
+            const auto mainLeft = readChannel (folder.getChildFile ("Main.wav"), 0);
+            const auto mainRight = readChannel (folder.getChildFile ("Main.wav"), 1);
+            const auto busLeft = readChannel (folder.getChildFile ("Bus 01.wav"), 0);
+            const auto busRight = readChannel (folder.getChildFile ("Bus 01.wav"), 1);
+            expectEquals ((int) mainLeft.size(), 256, "main length");
+            expectEquals ((int) busLeft.size(), 256, "bus length");
+
+            if (! mainLeft.empty() && ! mainRight.empty())
+            {
+                expectWithinAbsoluteError (mainLeft.back(), 0.25f, 0.0001f, "main left");
+                expectWithinAbsoluteError (mainRight.back(), -0.5f, 0.0001f, "main right");
+            }
+
+            if (! busLeft.empty() && ! busRight.empty())
+            {
+                expectWithinAbsoluteError (busLeft.back(), 0.125f, 0.0001f, "bus left");
+                expectWithinAbsoluteError (busRight.back(), 0.375f, 0.0001f, "bus right");
+            }
+
+            ConsoleModel model;
+            MixEngine engine (model);
+            engine.prepareToPlay (128, 48000.0);
+            engine.recorder().setTarget (recordMain, true);
+            engine.recorder().setTarget (recordCenter, false);
+
+            for (int bus = 0; bus < numBuses; ++bus)
+                engine.recorder().setTarget (recordBus (bus), false);
+
+            for (int matrix = 0; matrix < numMatrices; ++matrix)
+                engine.recorder().setTarget (recordMatrix (matrix), false);
+
+            const auto mixFolder = folder.getChildFile ("mix");
+            expect (mixFolder.createDirectory().wasOk(), "mix recording folder");
+            expect (engine.recorder().start (mixFolder), engine.recorder().lastError());
+            std::vector<float> tone ((size_t) 8000, 0.5f);
+            const int source = engine.adoptMemorySource (tone, 48000.0, "recorded");
+            routeSource (model, source, 0, { 0 });
+            expect (model.setFloat ("/ch/01/mix/fader", 0.75f));
+            expect (model.setFloat ("/main/st/mix/fader", 0.75f));
+            engine.play();
+            engine.snapSmoothers();
+
+            for (int offset = 0; offset < 2048; offset += 128)
+                renderBlock (engine, 128);
+
+            engine.recorder().stop();
+            const auto recordedMain = readChannel (mixFolder.getChildFile ("Main.wav"), 0);
+            float peak = 0.0f;
+
+            for (float sample : recordedMain)
+                peak = std::max (peak, std::abs (sample));
+
+            expect (peak > 0.2f, "the main mix is recorded while the source plays");
+            expect (engine.isPlaying(), "playback keeps running while the mix is recorded");
+            folder.deleteRecursively();
         }
     }
 
