@@ -17,15 +17,30 @@ const char* paramName(int type, int index)
 {
     const bool delay = type == (int) FxAlgo::stereoDelay;
     const bool chorus = type == (int) FxAlgo::stereoChorus;
+    const bool flanger = type == (int) FxAlgo::stereoFlanger;
+    const bool phaser = type == (int) FxAlgo::stereoPhaser;
+    const bool tremolo = type == (int) FxAlgo::tremoloPanner;
     static const char* room[] = { "Decay", "Predelay", "Size", "Damping" };
     static const char* delayNames[] = { "Time", "Feedback", "Right", "Damping" };
     static const char* chorusNames[] = { "Rate", "Depth", "Width", "Tone" };
+    static const char* flangerNames[] = { "Rate", "Depth", "Feedback", "Manual" };
+    static const char* phaserNames[] = { "Rate", "Depth", "Feedback", "Spread" };
+    static const char* tremoloNames[] = { "Rate", "Depth", "Phase", "Pan" };
 
     if (delay)
         return delayNames[index];
 
     if (chorus)
         return chorusNames[index];
+
+    if (flanger)
+        return flangerNames[index];
+
+    if (phaser)
+        return phaserNames[index];
+
+    if (tremolo)
+        return tremoloNames[index];
 
     return room[index];
 }
@@ -43,7 +58,7 @@ FxEditor::FxEditor(ConsoleModel& modelToUse)
     sendLabel.setColour(juce::Label::textColourId, juce::Colour(0xff98a2ad));
     addAndMakeVisible(sendLabel);
 
-    for (int type = 0; type <= (int) FxAlgo::stereoChorus; ++type)
+    for (int type = 0; type <= (int) FxAlgo::tremoloPanner; ++type)
         typeBox.addItem(fxAlgoName(type), type + 1);
 
     typeBox.onChange = [this]

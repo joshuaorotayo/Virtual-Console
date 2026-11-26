@@ -14,7 +14,7 @@ constexpr int numStripColours = 8;
 inline juce::Colour stripPalette(int index) noexcept
 {
     static const juce::uint32 colours[] = {
-        0xff1a1e24, 0xffe23b3b, 0xff3dce4a, 0xffffe14a,
+        0xfff08a24, 0xffe23b3b, 0xff3dce4a, 0xffffe14a,
         0xff3b82f6, 0xffa855f7, 0xff7af4f8, 0xfff7f8fa
     };
     return juce::Colour(colours[index & 7]);

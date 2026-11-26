@@ -11,6 +11,7 @@ namespace vc
 {
 
 class FaderBay;
+class OutputRow;
 class GroupEditor;
 class MatrixEditor;
 class RoutingBoard;
@@ -55,8 +56,11 @@ private:
     void selectBus (int busIndex);
     void selectMatrix (int matrixIndex);
     void selectSpare (int kind, int index);
-    void showBank (int bank);
+    void showInputPage (int page);
+    void showOutputPage (int page);
+    void applySendMode();
     void closeTopPages();
+    int inputPageCount() const;
     void removeSourceById (int sourceId);
     void syncTransport();
     juce::String statusText();
@@ -76,9 +80,6 @@ private:
     juce::Label title { {}, "Virtual Console 0.2.0" };
     juce::TextButton sourcesButton { "Sources" };
     juce::TextButton routingButton { "Routing" };
-    juce::TextButton busesButton { "Buses" };
-    juce::TextButton matricesButton { "Matrices" };
-    juce::TextButton dcasButton { "DCAs" };
     juce::Label mixLabel { {}, "Mix" };
     juce::ComboBox mixBox;
     juce::Label outputLabel { {}, "Output" };
@@ -96,12 +97,19 @@ private:
     std::unique_ptr<SourceList> sourceModel;
     juce::ListBox sourceList { "Sources", nullptr };
     std::unique_ptr<FaderBay> faderBay;
+    std::unique_ptr<OutputRow> outputRow;
     std::unique_ptr<RoutingBoard> routingBoard;
     juce::Viewport routingView;
     std::unique_ptr<ChannelEditor> channelEditor;
     std::unique_ptr<MatrixEditor> matrixEditor;
     std::unique_ptr<GroupEditor> groupEditor;
-    juce::TextButton bankButton[5];
+    juce::TextButton inputBankButton[6];
+    juce::TextButton widthButton { "16" };
+    juce::TextButton sendsButton { "Sends" };
+    juce::TextButton outputBankButton[5];
+    juce::TextButton mainSelect { "SEL" };
+    juce::TextButton centerSelect { "SEL" };
+    juce::Label muteHeading { {}, "Mute" };
     juce::Label spareTitle;
     std::unique_ptr<FxEditor> fxEditor;
     juce::Viewport viewport;
@@ -122,10 +130,11 @@ private:
     bool applyingOutput = false;
     bool sourcesOpen = false;
     bool routingOpen = false;
-    bool busesOpen = false;
-    bool matricesOpen = false;
-    bool dcasOpen = false;
-    int faderBank = 0;
+    int inputWidth = 16;
+    int inputPage = 0;
+    int outputPage = 4;
+    int armedBus = -1;
+    int dcaFilter = -1;
     int topEditor = 0;
     int spareKind = 0;
     int spareIndex = 0;

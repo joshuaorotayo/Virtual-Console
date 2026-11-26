@@ -556,6 +556,17 @@ bool setReturnAssign(ReturnStrip& strip, const juce::StringArray& tokens, int va
         return true;
     }
 
+    if (tokens.size() >= 5 && tokens[2] == "mix" && tokens[3].containsOnly("0123456789") && tokens[4] == "on")
+    {
+        const int bus = indexOf(tokens[3], numBuses);
+
+        if (bus < 0)
+            return false;
+
+        strip.sendOn[bus].store(value != 0 ? 1 : 0, std::memory_order_relaxed);
+        return true;
+    }
+
     return false;
 }
 
@@ -570,6 +581,17 @@ bool getReturnAssign(const ReturnStrip& strip, const juce::StringArray& tokens, 
     if (tokens.size() >= 4 && tokens[2] == "mix" && tokens[3] == "mono")
     {
         value = strip.toMono.load(std::memory_order_relaxed);
+        return true;
+    }
+
+    if (tokens.size() >= 5 && tokens[2] == "mix" && tokens[3].containsOnly("0123456789") && tokens[4] == "on")
+    {
+        const int bus = indexOf(tokens[3], numBuses);
+
+        if (bus < 0)
+            return false;
+
+        value = strip.sendOn[bus].load(std::memory_order_relaxed);
         return true;
     }
 
@@ -588,6 +610,9 @@ ConsoleModel::ConsoleModel()
         channelNames[i] = "Ch " + juce::String(i + 1);
         channels[(size_t) i].source.store(i, std::memory_order_relaxed);
         channels[(size_t) i].color = 6;
+
+        for (int bus = 0; bus < numBuses; ++bus)
+            channels[(size_t) i].sendOn[bus].store(1, std::memory_order_relaxed);
 
         for (int band = 0; band < numChannelEqBands; ++band)
         {
@@ -658,6 +683,9 @@ ConsoleModel::ConsoleModel()
         fxReturnNames[i] = "FX" + juce::String(i / 2 + 1) + (i % 2 == 0 ? " L" : " R");
         fxReturns[(size_t) i].color = 6;
         fxReturns[(size_t) i].toMain.store(1, std::memory_order_relaxed);
+
+        for (int bus = 0; bus < numBuses; ++bus)
+            fxReturns[(size_t) i].sendOn[bus].store(1, std::memory_order_relaxed);
         fxReturns[(size_t) i].pan.store(i % 2 == 0 ? 0.0f : 1.0f, std::memory_order_relaxed);
     }
 
@@ -665,13 +693,21 @@ ConsoleModel::ConsoleModel()
     {
         auxNames[i] = "Aux " + juce::String(i + 1);
         auxIns[(size_t) i].color = 6;
+
+        for (int bus = 0; bus < numBuses; ++bus)
+            auxIns[(size_t) i].sendOn[bus].store(1, std::memory_order_relaxed);
     }
 
     usbNames[0] = "USB L";
     usbNames[1] = "USB R";
 
     for (auto& strip : usbReturns)
+    {
         strip.color = 6;
+
+        for (int bus = 0; bus < numBuses; ++bus)
+            strip.sendOn[bus].store(1, std::memory_order_relaxed);
+    }
 
     for (int i = 0; i < numDcas; ++i)
     {
@@ -1896,6 +1932,17 @@ bool ConsoleModel::assignInt(const juce::String& path, int value)
             return true;
         }
 
+        if (tokens.size() >= 5 && tokens[2] == "mix" && tokens[3].containsOnly("0123456789") && tokens[4] == "on")
+        {
+            const int bus = indexOf(tokens[3], numBuses);
+
+            if (bus < 0)
+                return false;
+
+            strip.sendOn[bus].store(value != 0 ? 1 : 0, std::memory_order_relaxed);
+            return true;
+        }
+
         if (setMixOn(strip, tokens, 2, value))
             return true;
 
@@ -2044,7 +2091,7 @@ bool ConsoleModel::assignInt(const juce::String& path, int value)
 
         if (tokens[2] == "type")
         {
-            fx[(size_t) slot].type.store(std::clamp(value, 0, (int) FxAlgo::stereoChorus), std::memory_order_relaxed);
+            fx[(size_t) slot].type.store(std::clamp(value, 0, (int) FxAlgo::tremoloPanner), std::memory_order_relaxed);
             return true;
         }
 
@@ -2323,6 +2370,17 @@ bool ConsoleModel::getInt(const juce::String& path, int& value) const
                 return false;
 
             value = strip.sendPre[bus].load(std::memory_order_relaxed);
+            return true;
+        }
+
+        if (tokens.size() >= 5 && tokens[2] == "mix" && tokens[3].containsOnly("0123456789") && tokens[4] == "on")
+        {
+            const int bus = indexOf(tokens[3], numBuses);
+
+            if (bus < 0)
+                return false;
+
+            value = strip.sendOn[bus].load(std::memory_order_relaxed);
             return true;
         }
 

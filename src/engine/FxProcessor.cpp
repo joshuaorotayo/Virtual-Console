@@ -23,6 +23,28 @@ float param(const FxSlot& slot, int index) noexcept
 {
     return slot.par[index].load(std::memory_order_relaxed);
 }
+
+constexpr float twoPi = 6.2831853f;
+
+float wrapPhase(float phase) noexcept
+{
+    if (phase >= 1.0f)
+        phase -= 1.0f;
+
+    return phase;
+}
+
+float sineUnit(float phase) noexcept
+{
+    return 0.5f + 0.5f * std::sin(phase * twoPi);
+}
+
+float allpass(float input, float& state, float coefficient) noexcept
+{
+    const float output = state - coefficient * input;
+    state = input + coefficient * output;
+    return output;
+}
 } // namespace
 
 const char* fxAlgoName(int type) noexcept
@@ -33,13 +55,16 @@ const char* fxAlgoName(int type) noexcept
         case (int) FxAlgo::hall: return "Hall";
         case (int) FxAlgo::stereoDelay: return "Stereo Delay";
         case (int) FxAlgo::stereoChorus: return "Stereo Chorus";
+        case (int) FxAlgo::stereoFlanger: return "Stereo Flanger";
+        case (int) FxAlgo::stereoPhaser: return "Stereo Phaser";
+        case (int) FxAlgo::tremoloPanner: return "Tremolo / Panner";
         default: return "Empty";
     }
 }
 
 void storeFxDefaults(FxSlot& slot, int type) noexcept
 {
-    const int algo = std::clamp(type, 0, (int) FxAlgo::stereoChorus);
+    const int algo = std::clamp(type, 0, (int) FxAlgo::tremoloPanner);
     slot.type.store(algo, std::memory_order_relaxed);
 
     float primary = 0.5f;
@@ -72,6 +97,24 @@ void storeFxDefaults(FxSlot& slot, int type) noexcept
             secondary = 0.45f;
             size = 0.5f;
             damp = 0.2f;
+            break;
+        case (int) FxAlgo::stereoFlanger:
+            primary = 0.22f;
+            secondary = 0.55f;
+            size = 0.5f;
+            damp = 0.35f;
+            break;
+        case (int) FxAlgo::stereoPhaser:
+            primary = 0.24f;
+            secondary = 0.7f;
+            size = 0.28f;
+            damp = 0.45f;
+            break;
+        case (int) FxAlgo::tremoloPanner:
+            primary = 0.32f;
+            secondary = 0.6f;
+            size = 0.2f;
+            damp = 0.0f;
             break;
         default:
             break;
@@ -140,6 +183,10 @@ void FxRack::Voice::prepare(double sampleRate)
     delayFilterL = 0.0f;
     delayFilterR = 0.0f;
     chorusPhase = 0.0f;
+    phaserL.fill(0.0f);
+    phaserR.fill(0.0f);
+    phaserHoldL = 0.0f;
+    phaserHoldR = 0.0f;
 }
 
 void FxRack::prepare(double newSampleRate)
@@ -212,6 +259,24 @@ void FxRack::Voice::process(const FxSlot& settings, double rate, float inL, floa
         return;
     }
 
+    if (type == (int) FxAlgo::stereoFlanger)
+    {
+        processFlanger(settings, rate, inL, inR, outL, outR);
+        return;
+    }
+
+    if (type == (int) FxAlgo::stereoPhaser)
+    {
+        processPhaser(settings, rate, inL, inR, outL, outR);
+        return;
+    }
+
+    if (type == (int) FxAlgo::tremoloPanner)
+    {
+        processTremolo(settings, rate, inL, inR, outL, outR);
+        return;
+    }
+
     if (type != (int) FxAlgo::vintageRoom && type != (int) FxAlgo::hall)
         return;
 
@@ -260,6 +325,71 @@ void FxRack::Voice::process(const FxSlot& settings, double rate, float inL, floa
 
     outL = sumL;
     outR = sumR;
+}
+
+void FxRack::Voice::processFlanger(const FxSlot& settings, double rate, float inL, float inR, float& outL, float& outR) noexcept
+{
+    const float speed = 0.05f + param(settings, fxParPrimary) * 5.0f;
+    const float depthMs = param(settings, fxParSecondary) * 4.0f;
+    const float feedback = std::clamp((param(settings, fxParSize) - 0.5f) * 1.5f, -0.75f, 0.75f);
+    const float manualMs = 0.3f + param(settings, fxParDamp) * 6.0f;
+    chorusPhase = wrapPhase(chorusPhase + speed / (float) rate);
+
+    const float leftWave = sineUnit(chorusPhase);
+    const float rightWave = sineUnit(chorusPhase + 0.5f);
+    const int leftTap = std::max(1, (int) std::lround((manualMs + leftWave * depthMs) * 0.001 * rate));
+    const int rightTap = std::max(1, (int) std::lround((manualMs + rightWave * depthMs) * 0.001 * rate));
+    const float delayedL = delayL.read(leftTap);
+    const float delayedR = delayR.read(rightTap);
+    delayL.writeSample(inL + delayedL * feedback);
+    delayR.writeSample(inR + delayedR * feedback);
+    outL = delayedL;
+    outR = delayedR;
+}
+
+void FxRack::Voice::processPhaser(const FxSlot& settings, double rate, float inL, float inR, float& outL, float& outR) noexcept
+{
+    const float speed = 0.05f + param(settings, fxParPrimary) * 4.0f;
+    const float depth = std::clamp(param(settings, fxParSecondary), 0.0f, 1.0f);
+    const float feedback = std::clamp(param(settings, fxParSize) * 0.6f, 0.0f, 0.6f);
+    const float spread = std::clamp(param(settings, fxParDamp), 0.0f, 1.0f);
+    chorusPhase = wrapPhase(chorusPhase + speed / (float) rate);
+
+    auto coefficient = [&](float wave)
+    {
+        const float sweep = (1.0f - depth) * 0.5f + depth * wave;
+        return std::clamp(0.08f + spread * 0.5f + sweep * 0.34f, 0.05f, 0.92f);
+    };
+
+    auto sweep = [&](float input, float coefficientValue, std::array<float, 4>& state, float& held)
+    {
+        float sample = input + held * feedback;
+
+        for (float& stage : state)
+            sample = allpass(sample, stage, coefficientValue);
+
+        held = sample;
+        return sample;
+    };
+
+    outL = sweep(inL, coefficient(sineUnit(chorusPhase)), phaserL, phaserHoldL);
+    outR = sweep(inR, coefficient(sineUnit(chorusPhase + 0.5f)), phaserR, phaserHoldR);
+}
+
+void FxRack::Voice::processTremolo(const FxSlot& settings, double rate, float inL, float inR, float& outL, float& outR) noexcept
+{
+    const float speed = 0.1f + param(settings, fxParPrimary) * 10.0f;
+    const float depth = std::clamp(param(settings, fxParSecondary), 0.0f, 1.0f);
+    const float offset = std::clamp(param(settings, fxParSize), 0.0f, 1.0f) * 0.5f;
+    const bool pan = param(settings, fxParDamp) >= 0.5f;
+    chorusPhase = wrapPhase(chorusPhase + speed / (float) rate);
+
+    const float leftWave = sineUnit(chorusPhase);
+    const float rightWave = sineUnit(chorusPhase + (pan ? 0.5f : offset));
+    const float leftGain = (1.0f - depth) + depth * leftWave;
+    const float rightGain = (1.0f - depth) + depth * rightWave;
+    outL = inL * leftGain;
+    outR = inR * rightGain;
 }
 
 } // namespace vc

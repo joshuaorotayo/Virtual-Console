@@ -693,6 +693,43 @@ public:
             expectWithinAbsoluteError (block.left[8], 0.7071f, 0.03f, "mono assign folds the return into stereo");
             expectWithinAbsoluteError (block.right[8], 0.7071f, 0.03f);
         }
+
+        beginTest ("modulation effects pass the send");
+        {
+            ConsoleModel model;
+            MixEngine engine (model);
+            engine.prepareToPlay (32, 48000.0);
+            const int source = engine.adoptMemorySource (std::vector<float> (256, 1.0f), 48000.0, "mod");
+            routeSource (model, source, 0, { 0 });
+            expect (model.setFloat ("/ch/01/mix/pan", 0.0f));
+            expect (model.setInt ("/ch/01/mix/st", 0));
+            expect (model.setFloat ("/ch/01/mix/13/level", 0.75f));
+            engine.play();
+
+            model.setFxType (0, (int) FxAlgo::tremoloPanner);
+            expectEquals (juce::String (fxAlgoName ((int) FxAlgo::tremoloPanner)), juce::String ("Tremolo / Panner"));
+            expect (model.setFloat ("/fx/01/par/02", 0.0f));
+            engine.snapSmoothers();
+            auto block = renderBlock (engine, 32);
+            expectWithinAbsoluteError (block.left[8], 1.0f, 0.02f, "tremolo with no depth returns the send");
+            expectWithinAbsoluteError (block.right[8], 0.0f, 0.02f);
+
+            model.setFxType (0, (int) FxAlgo::stereoPhaser);
+            expect (model.setFloat ("/fx/01/par/02", 0.0f));
+            expect (model.setFloat ("/fx/01/par/03", 0.0f));
+            expect (model.setFloat ("/fx/01/par/04", 0.0f));
+            engine.snapSmoothers();
+            block = renderBlock (engine, 32);
+            expectWithinAbsoluteError (block.left[24], 1.0f, 0.05f, "a still phaser passes the send");
+
+            model.setFxType (0, (int) FxAlgo::stereoFlanger);
+            expect (model.setFloat ("/fx/01/par/02", 0.0f));
+            expect (model.setFloat ("/fx/01/par/03", 0.5f));
+            expect (model.setFloat ("/fx/01/par/04", 0.0f));
+            engine.snapSmoothers();
+            block = renderBlock (engine, 32);
+            expectWithinAbsoluteError (block.left[24], 1.0f, 0.05f, "a still flanger passes the send");
+        }
     }
 
 private:

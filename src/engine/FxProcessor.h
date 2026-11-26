@@ -23,7 +23,10 @@ enum class FxAlgo : int
     vintageRoom = 1,
     hall = 2,
     stereoDelay = 3,
-    stereoChorus = 4
+    stereoChorus = 4,
+    stereoFlanger = 5,
+    stereoPhaser = 6,
+    tremoloPanner = 7
 };
 
 const char* fxAlgoName(int type) noexcept;
@@ -61,9 +64,16 @@ private:
         float delayFilterL = 0.0f;
         float delayFilterR = 0.0f;
         float chorusPhase = 0.0f;
+        std::array<float, 4> phaserL {};
+        std::array<float, 4> phaserR {};
+        float phaserHoldL = 0.0f;
+        float phaserHoldR = 0.0f;
 
         void prepare(double sampleRate);
         void process(const FxSlot& settings, double sampleRate, float inL, float inR, float& outL, float& outR) noexcept;
+        void processFlanger(const FxSlot& settings, double sampleRate, float inL, float inR, float& outL, float& outR) noexcept;
+        void processPhaser(const FxSlot& settings, double sampleRate, float inL, float inR, float& outL, float& outR) noexcept;
+        void processTremolo(const FxSlot& settings, double sampleRate, float inL, float inR, float& outL, float& outR) noexcept;
     };
 
     double sampleRate = 48000.0;

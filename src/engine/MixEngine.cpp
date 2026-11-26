@@ -682,6 +682,7 @@ void MixEngine::processChunk(float* left, float* right, int numSamples, juce::in
     std::array<float, numChannels> monoTarget {};
     std::array<std::array<float, numBuses>, numChannels> sendTarget {};
     std::array<std::array<char, numBuses>, numChannels> sendTap {};
+    std::array<std::array<char, numBuses>, numChannels> sendEnabled {};
     std::array<float, numBuses> busTargetL {};
     std::array<float, numBuses> busTargetR {};
     std::array<float, numBuses> busPostTarget {};
@@ -716,6 +717,7 @@ void MixEngine::processChunk(float* left, float* right, int numSamples, juce::in
 
         for (int bus = 0; bus < numBuses; ++bus)
         {
+            sendEnabled[(size_t) channel][(size_t) bus] = strip.sendOn[bus].load(std::memory_order_relaxed) != 0 ? 1 : 0;
             sendTarget[(size_t) channel][(size_t) bus] = faderToGain(strip.sendLevel[bus].load(std::memory_order_relaxed));
             sendTap[(size_t) channel][(size_t) bus] = (char) std::clamp(strip.sendPre[bus].load(std::memory_order_relaxed), 0, 4);
         }
@@ -763,7 +765,10 @@ void MixEngine::processChunk(float* left, float* right, int numSamples, juce::in
         returnToMain[(size_t) ret] = model.fxReturn(ret).toMain.load(std::memory_order_relaxed) != 0 ? 1 : 0;
 
         for (int bus = 0; bus < numBuses; ++bus)
-            returnSendTarget[(size_t) ret][(size_t) bus] = faderToGain(model.fxReturn(ret).sendLevel[bus].load(std::memory_order_relaxed));
+        {
+            const float enabled = model.fxReturn(ret).sendOn[bus].load(std::memory_order_relaxed) != 0 ? 1.0f : 0.0f;
+            returnSendTarget[(size_t) ret][(size_t) bus] = faderToGain(model.fxReturn(ret).sendLevel[bus].load(std::memory_order_relaxed)) * enabled;
+        }
     }
 
     std::array<float, numMatrices> matrixTarget {};
@@ -894,7 +899,7 @@ void MixEngine::processChunk(float* left, float* right, int numSamples, juce::in
                 if (! subgroup && gain <= 1.0e-6f)
                     continue;
 
-                const float send = subgroup ? 1.0f : gain;
+                const float send = (subgroup ? 1.0f : gain) * (float) sendEnabled[(size_t) channel][(size_t) bus];
                 const float sendMute = audible[(size_t) channel] != 0 ? 1.0f : 0.0f;
 
                 if (tap == 1 || tap == 2 || tap == 3)

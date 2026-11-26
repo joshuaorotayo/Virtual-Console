@@ -216,7 +216,7 @@ ChannelStrip::ChannelStrip (ConsoleModel& modelToUse, MixEngine& engineToUse, in
         return (double) dbToFader (text.getFloatValue());
     };
     fader.setValue (readFloat (model, channelLeaf (index, "mix/fader"), 0.75f), juce::dontSendNotification);
-    fader.onValueChange = [this] { model.setFloat (channelLeaf (index, "mix/fader"), (float) fader.getValue()); };
+    fader.onValueChange = [this] { model.setFloat (levelPath(), (float) fader.getValue()); };
     fader.onDragStart = [this] { choose(); };
     addAndMakeVisible (fader);
     addAndMakeVisible (scale);
@@ -225,12 +225,12 @@ ChannelStrip::ChannelStrip (ConsoleModel& modelToUse, MixEngine& engineToUse, in
     mute.setColour (juce::TextButton::buttonOnColourId, muteOn());
     mute.setTooltip ("Mute");
     int enabled = 1;
-    model.getInt (channelLeaf (index, "mix/on"), enabled);
+    model.getInt (mutePath(), enabled);
     mute.setToggleState (enabled == 0, juce::dontSendNotification);
     mute.onClick = [this]
     {
         choose();
-        model.setInt (channelLeaf (index, "mix/on"), mute.getToggleState() ? 0 : 1);
+        model.setInt (mutePath(), mute.getToggleState() ? 0 : 1);
     };
     addAndMakeVisible (mute);
 
@@ -280,6 +280,46 @@ void ChannelStrip::choose()
         onSelect();
 }
 
+juce::String ChannelStrip::levelPath() const
+{
+    if (sendBus < 0)
+        return channelLeaf (index, "mix/fader");
+
+    return "/ch/" + juce::String (index + 1).paddedLeft ('0', 2)
+         + "/mix/" + juce::String (sendBus + 1).paddedLeft ('0', 2) + "/level";
+}
+
+juce::String ChannelStrip::mutePath() const
+{
+    if (sendBus < 0)
+        return channelLeaf (index, "mix/on");
+
+    return "/ch/" + juce::String (index + 1).paddedLeft ('0', 2)
+         + "/mix/" + juce::String (sendBus + 1).paddedLeft ('0', 2) + "/on";
+}
+
+void ChannelStrip::setSendBus (int busIndex)
+{
+    const int next = busIndex >= 0 && busIndex < numBuses ? busIndex : -1;
+
+    if (sendBus == next)
+        return;
+
+    sendBus = next;
+    fader.setTooltip (sendBus < 0 ? "Channel level" : "Send to " + model.getBusName (sendBus) + ". The tap set on this channel's sends page stays in use.");
+    mute.setTooltip (sendBus < 0 ? "Mute" : "Mute this channel on " + model.getBusName (sendBus));
+    refresh();
+}
+
+void ChannelStrip::setHighlighted (bool shouldHighlight)
+{
+    if (highlighted == shouldHighlight)
+        return;
+
+    highlighted = shouldHighlight;
+    repaint();
+}
+
 void ChannelStrip::setSelected (bool shouldSelect)
 {
     if (selected == shouldSelect)
@@ -303,6 +343,19 @@ void ChannelStrip::refresh()
     model.getInt (channelLeaf (index, "config/color"), colour);
     icon.setStripColour (colour);
     scribble.setColour (juce::Label::textColourId, stripNameColour (colour));
+
+    if (! fader.isMouseButtonDown())
+    {
+        const float fallback = sendBus < 0 ? 0.75f : 0.0f;
+        fader.setValue (readFloat (model, levelPath(), fallback), juce::dontSendNotification);
+    }
+
+    if (! mute.isMouseButtonDown())
+    {
+        int enabled = 1;
+        model.getInt (mutePath(), enabled);
+        mute.setToggleState (enabled == 0, juce::dontSendNotification);
+    }
 
     if (! stereo.isMouseButtonDown())
     {
@@ -337,10 +390,10 @@ void ChannelStrip::paint (juce::Graphics& g)
     g.setColour (colour);
     g.fillRoundedRectangle (8.0f, 8.0f, (float) getWidth() - 16.0f, selected ? 6.0f : 4.0f, 2.0f);
 
-    if (selected)
+    if (selected || highlighted)
     {
-        g.setColour (colour);
-        g.drawRoundedRectangle (bounds, 6.0f, 2.0f);
+        g.setColour (highlighted ? juce::Colour (0xffe0b040) : colour);
+        g.drawRoundedRectangle (bounds, 6.0f, highlighted ? 3.0f : 2.0f);
     }
 }
 

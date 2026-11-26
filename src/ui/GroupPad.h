@@ -139,7 +139,7 @@ private:
         const int rows = (count + columns - 1) / columns;
         const float cellW = grid.getWidth() / (float) columns;
         const float cellH = rows > 0 ? grid.getHeight() / (float) rows : 0.0f;
-        const float size = juce::jmax(12.0f, juce::jmin(cellW, cellH) - (circle ? 10.0f : 12.0f));
+        const float size = juce::jmin(34.0f, juce::jmax(16.0f, juce::jmin(cellW, cellH) - (circle ? 8.0f : 10.0f)));
 
         for (int index = 0; index < count; ++index)
         {

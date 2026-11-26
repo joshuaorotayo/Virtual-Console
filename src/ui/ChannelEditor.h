@@ -32,6 +32,23 @@ private:
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ChannelEditor)
 };
 
+class BusProcessingView : public juce::Component
+{
+public:
+    explicit BusProcessingView(ConsoleModel& modelToUse);
+    ~BusProcessingView() override;
+
+    void setRoot(const juce::String& root);
+    void refresh();
+    void resized() override;
+
+private:
+    struct Body;
+    std::unique_ptr<Body> body;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(BusProcessingView)
+};
+
 class MatrixEditor : public juce::Component
 {
 public:

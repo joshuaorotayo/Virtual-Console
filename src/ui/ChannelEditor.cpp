@@ -2470,8 +2470,8 @@ public:
         int stored = index % 8;
         model.getInt(root + "/config/color", stored);
         g.setColour(stripColourFrom(stored));
-        g.fillRect(0, 0, getWidth(), 4);
-        g.drawRoundedRectangle(getLocalBounds().toFloat().reduced(1.0f), 8.0f, 2.0f);
+        g.fillRect(0, 0, getWidth(), 8);
+        g.drawRoundedRectangle(getLocalBounds().toFloat().reduced(1.0f), 8.0f, 3.0f);
     }
 
     void resized() override
@@ -2492,12 +2492,12 @@ public:
         title.setVisible(home);
         insert.setVisible(home);
         groupPad->setVisible(home);
-        eqOn.setVisible(equaliser);
-        eqGraph.setVisible(equaliser);
+        eqOn.setVisible(home || equaliser);
+        eqGraph.setVisible(home || equaliser);
         gateOn.setVisible(dynamics);
         gateGraph.setVisible(dynamics);
-        compOn.setVisible(dynamics);
-        compGraph.setVisible(dynamics);
+        compOn.setVisible(home || dynamics);
+        compGraph.setVisible(home || dynamics);
 
         for (auto* knob : { gateAttack, gateHold, gateRelease })
             if (knob != nullptr)
@@ -2512,7 +2512,13 @@ public:
             auto header = area.removeFromTop(32);
             title.setBounds(header.removeFromLeft(160));
             insert.setBounds(header.removeFromLeft(120).reduced(4, 2));
-            groupPad->setBounds(area.reduced(4, 4));
+            auto groups = area.removeFromRight(248);
+            groupPad->setBounds(groups.removeFromTop(juce::jmin(250, groups.getHeight())).reduced(4, 0));
+            auto equaliserColumn = area.removeFromLeft(juce::jmax(1, area.getWidth() / 2)).reduced(4, 0);
+            eqOn.setBounds(equaliserColumn.removeFromTop(28).removeFromLeft(72));
+            eqGraph.setBounds(equaliserColumn);
+            compOn.setBounds(area.removeFromTop(28).removeFromLeft(72));
+            compGraph.setBounds(area.reduced(4, 0));
         }
         else if (equaliser)
         {
@@ -2612,6 +2618,101 @@ void MatrixEditor::refresh()
 void MatrixEditor::resized()
 {
     surface->setBounds(getLocalBounds());
+}
+
+struct BusProcessingView::Body : public juce::Component
+{
+    Body(ConsoleModel& modelToUse)
+        : model(modelToUse),
+          eqGraph(modelToUse),
+          compGraph(modelToUse, DynamicsGraph::Kind::compressor)
+    {
+        eqOn.setClickingTogglesState(true);
+        eqOn.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xff3d8f5a));
+        eqOn.setColour(juce::TextButton::textColourOnId, juce::Colour(0xff1c2128));
+        eqOn.onClick = [this] { model.setInt(root + "/eq/on", eqOn.getToggleState() ? 1 : 0); };
+        addAndMakeVisible(eqOn);
+        addAndMakeVisible(eqGraph);
+
+        compOn.setClickingTogglesState(true);
+        compOn.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xffe0b040));
+        compOn.setColour(juce::TextButton::textColourOnId, juce::Colour(0xff1c2128));
+        compOn.onClick = [this] { model.setInt(root + "/dyn/on", compOn.getToggleState() ? 1 : 0); };
+        addAndMakeVisible(compOn);
+        addAndMakeVisible(compGraph);
+    }
+
+    void setRoot(const juce::String& newRoot)
+    {
+        root = newRoot;
+        eqGraph.setTarget(root, numEqBands, false);
+        compGraph.setPathRoot(root);
+        refresh();
+    }
+
+    void refresh()
+    {
+        if (root.isEmpty())
+            return;
+
+        if (! eqOn.isMouseButtonDown())
+        {
+            int enabled = 1;
+            model.getInt(root + "/eq/on", enabled);
+            eqOn.setToggleState(enabled != 0, juce::dontSendNotification);
+        }
+
+        if (! compOn.isMouseButtonDown())
+        {
+            int enabled = 0;
+            model.getInt(root + "/dyn/on", enabled);
+            compOn.setToggleState(enabled != 0, juce::dontSendNotification);
+        }
+
+        eqGraph.repaint();
+        compGraph.repaint();
+    }
+
+    void resized() override
+    {
+        auto area = getLocalBounds();
+        auto equaliser = area.removeFromLeft(area.getWidth() / 2).reduced(4);
+        auto dynamics = area.reduced(4);
+        eqOn.setBounds(equaliser.removeFromTop(28).removeFromLeft(72));
+        eqGraph.setBounds(equaliser);
+        compOn.setBounds(dynamics.removeFromTop(28).removeFromLeft(72));
+        compGraph.setBounds(dynamics);
+    }
+
+    ConsoleModel& model;
+    juce::String root;
+    juce::TextButton eqOn { "EQ" };
+    juce::TextButton compOn { "Comp" };
+    EqGraph eqGraph;
+    DynamicsGraph compGraph;
+};
+
+BusProcessingView::BusProcessingView(ConsoleModel& modelToUse)
+    : body(std::make_unique<Body>(modelToUse))
+{
+    addAndMakeVisible(*body);
+}
+
+BusProcessingView::~BusProcessingView() = default;
+
+void BusProcessingView::setRoot(const juce::String& root)
+{
+    body->setRoot(root);
+}
+
+void BusProcessingView::refresh()
+{
+    body->refresh();
+}
+
+void BusProcessingView::resized()
+{
+    body->setBounds(getLocalBounds());
 }
 
 } // namespace vc

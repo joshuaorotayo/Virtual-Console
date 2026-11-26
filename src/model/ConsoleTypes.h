@@ -121,6 +121,7 @@ struct ReturnStrip : MixPoint
     std::atomic<int> toMono { 0 };
     std::atomic<float> monoLevel { 0.75f };
     std::atomic<float> sendLevel[numBuses] {};
+    std::atomic<int> sendOn[numBuses] {};
     int color = 6;
 };
 
@@ -164,6 +165,7 @@ struct Channel : MixPoint
     std::atomic<float> delayTime { 0.0f };
     Dynamics gate {};
     std::atomic<float> sendLevel[numBuses] {};
+    std::atomic<int> sendOn[numBuses] {};
     std::atomic<int> sendPre[numBuses] {};
     std::atomic<int> dcaMask { 0 };
     std::atomic<int> muteMask { 0 };

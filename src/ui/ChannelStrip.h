@@ -48,16 +48,22 @@ public:
     void paint (juce::Graphics& g) override;
     void mouseDown (const juce::MouseEvent& event) override;
     void setSelected (bool shouldSelect);
+    void setHighlighted (bool shouldHighlight);
+    void setSendBus (int busIndex);
     void refresh();
     std::function<void()> onSelect;
 
 private:
     void choose();
+    juce::String levelPath() const;
+    juce::String mutePath() const;
 
     ConsoleModel& model;
     MixEngine& engine;
     int index = 0;
+    int sendBus = -1;
     bool selected = false;
+    bool highlighted = false;
 
     class NameLabel : public juce::Label
     {
